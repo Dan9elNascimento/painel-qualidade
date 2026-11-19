@@ -2,7 +2,7 @@
    Tudo roda no navegador de quem clicou, com o login dessa pessoa. Nenhum dado sai do PC. */
 (function () {
   'use strict';
-  var VERSAO = '1.2.0';
+  var VERSAO = '1.2.2';
   var ID = 'painel-qualidade-raiz';
   var ZONAS_PADRAO = ['AV', 'D', 'DEM', 'EXZO', 'MI', 'MO', 'OS', 'RO', 'TS', 'RTS'];
 
@@ -322,6 +322,10 @@
     }
     throw new Error('Não consegui puxar do Cubiscan nesta página. Atualize a página (F5), espere carregar e tente de novo. Se continuar, use "Baixar CSV" e arraste o arquivo aqui.');
   }
+  function areaDe(rua) {   // BRFPE1-A2-04 -> A2 | BRFPE1-HS29-01 -> HS | BRFPE1-HV-03 -> HV
+    var seg = String(rua).split('-')[1] || '', m = seg.match(/^([A-Z]{2,})\d+$/);
+    return m ? m[1] : seg;
+  }
   function ruaDe(loc) { var p = String(loc || '').trim().toUpperCase().split('-'); return p.length >= 3 ? p.slice(0, 3).join('-') : String(loc || '').trim().toUpperCase(); }
   function ordemNatural(a, b) {
     var x = a.split(/(\d+)/), y = b.split(/(\d+)/);
@@ -341,18 +345,30 @@
       var n = Math.ceil(r.itens.length / max), tam = Math.ceil(r.itens.length / n);   // rua grande demais: divide
       for (var k = 0; k < n; k++) pedacos.push({ rua: r.rua, parte: (k + 1) + '/' + n, itens: r.itens.slice(k * tam, (k + 1) * tam) });
     });
-    var lotes = [], atual = null;
-    function total(l) { return l.pedacos.reduce(function (s, p) { return s + p.itens.length; }, 0); }
-    pedacos.forEach(function (p) {
-      if (atual && total(atual) + p.itens.length > max) { lotes.push(atual); atual = null; }
-      if (!atual) atual = { pedacos: [] };
-      atual.pedacos.push(p);
-      if (total(atual) >= min && total(atual) >= max - 5) { lotes.push(atual); atual = null; }
-    });
-    if (atual) {
-      var ult = lotes[lotes.length - 1];
-      if (total(atual) < min && ult && total(ult) + total(atual) <= max) ult.pedacos = ult.pedacos.concat(atual.pedacos); else lotes.push(atual);
+    // Divide as ruas (em ordem) em k grupos vizinhos o mais equilibrados possível.
+    // Começa com o menor k que cabe no máximo e aumenta até todos os lotes ficarem <= max.
+    var tam = pedacos.map(function (p) { return p.itens.length; }), n = tam.length;
+    var soma = tam.reduce(function (a, b) { return a + b; }, 0), pre = [0];
+    tam.forEach(function (t, i) { pre.push(pre[i] + t); });
+    function particionar(k) {   // programação dinâmica: minimiza o maior lote
+      var INF = 1e15, dp = [], corte = [];
+      for (var g = 0; g <= k; g++) { dp.push(new Array(n + 1).fill(INF)); corte.push(new Array(n + 1).fill(0)); }
+      dp[0][0] = 0;
+      for (g = 1; g <= k; g++) for (var i = 1; i <= n; i++) for (var j = g - 1; j < i; j++) {
+        var v = Math.max(dp[g - 1][j], pre[i] - pre[j]);
+        if (v < dp[g][i]) { dp[g][i] = v; corte[g][i] = j; }
+      }
+      var grupos = [], fim = n;
+      for (g = k; g >= 1; g--) { var ini = corte[g][fim]; grupos.unshift(pedacos.slice(ini, fim)); fim = ini; }
+      return { maior: dp[k][n], grupos: grupos };
     }
+    var lotes = [];
+    if (n) {
+      var k = Math.max(1, Math.ceil(soma / max)), res = particionar(Math.min(k, n));
+      while (res.maior > max && k < n) { k++; res = particionar(k); }
+      lotes = res.grupos.filter(function (g) { return g.length; }).map(function (g) { return { pedacos: g }; });
+    }
+    function total(l) { return l.pedacos.reduce(function (s, p) { return s + p.itens.length; }, 0); }
     lotes.forEach(function (l, i) { l.n = i + 1; l.total = total(l); l.ok = l.total >= min && l.total <= max; });
     return lotes;
   }
@@ -371,7 +387,11 @@
     });
     var ruas = Object.keys(porRua).sort(ordemNatural).map(function (r) { return { rua: r, itens: porRua[r].sort(function (a, b) { return ordemNatural(a.loc, b.loc); }) }; });
     aviso('Juntando ruas em lotes de ' + min + ' a ' + max + ' SKUs…', 70);
-    var lotes = montarLotes(ruas, min, max);
+    var porArea = {}, ordemAreas = [];
+    ruas.forEach(function (r) { var a = areaDe(r.rua); if (!porArea[a]) { porArea[a] = []; ordemAreas.push(a); } porArea[a].push(r); });
+    var lotes = [];
+    ordemAreas.forEach(function (a) { montarLotes(porArea[a], min, max).forEach(function (l) { l.area = a; lotes.push(l); }); });
+    lotes.forEach(function (l, i) { l.n = i + 1; });
     var loteDaRua = {};
     lotes.forEach(function (l) { l.pedacos.forEach(function (p) { (loteDaRua[p.rua] = loteDaRua[p.rua] || []).push(l.n); }); });
     function nomeAba(l) { return 'Lote ' + l.n + ' - ' + l.total + ' SKUs'; }
@@ -382,18 +402,19 @@
     var links = ruas.map(function (r, i) { var ns = loteDaRua[r.rua] || []; return ns.length ? { ref: 'C' + (i + 2), alvo: "'" + nomeAba(lotes[ns[0] - 1]) + "'!A1", texto: linRuas[i][2] } : null; }).filter(Boolean);
     var abaRuas = { nome: 'Ruas (dinâmica)', cab: ['Rua', 'Qtd SKU', 'Lote'], linhas: linRuas, op: { semFiltro: true, links: links,
       estilo: function (i) { return i < ruas.length ? corRua[i] : (i === linRuas.length - 1 ? 9 : 8); } } };
-    var resumoLotes = { nome: 'Lotes', cab: ['Lote', 'SKUs', 'Ruas', 'Dentro da faixa?'], linhas: lotes.map(function (l) {
-      return ['Lote ' + l.n, String(l.total), l.pedacos.map(function (p) { return p.rua + (p.parte ? ' (parte ' + p.parte + ')' : ''); }).join(', '), l.ok ? 'Sim' : (l.total < min ? 'Abaixo de ' + min : 'Acima de ' + max)];
+    var resumoLotes = { nome: 'Lotes', cab: ['Lote', 'Área', 'SKUs', 'Ruas', 'Dentro da faixa?'], linhas: lotes.map(function (l) {
+      return ['Lote ' + l.n, l.area, String(l.total), l.pedacos.map(function (p) { return p.rua + (p.parte ? ' (parte ' + p.parte + ')' : ''); }).join(', '), l.ok ? 'Sim' : (l.total < min ? 'Abaixo de ' + min : 'Acima de ' + max)];
     }), op: { semFiltro: true, estilo: function (i) { return 2 + i % CORES_LOTE.length; } } };
     var abasLote = lotes.map(function (l) {
       var its = []; l.pedacos.forEach(function (p) { its = its.concat(p.itens); });
-      return { nome: nomeAba(l), cab: ['SKU', 'location', 'rua', 'Task ID', 'Caixa (ASN)', 'Posicao 2'], linhas: its.map(function (x) { return [x.sku, x.loc, x.rua, x.task, x.cx, x.pos2]; }) };
+      return { nome: nomeAba(l), cab: ['SKU', 'location', 'rua'], linhas: its.map(function (x) { return [x.sku, x.loc, x.rua]; }) };
     });
     aviso('Gerando a planilha…', 85);
     var blob = await gerarXLSX([resumoLotes, abaRuas].concat(abasLote, [
       { nome: 'Sem posição', cab: ['SKU', 'Task ID', 'Caixa (ASN)'], linhas: semPos.map(function (x) { return [x.sku, x.task, x.cx]; }) },
       { nome: 'Unificado', cab: cab, linhas: linhas }]));
-    return { blob: blob, nome: 'Cubiscan_lotes_' + carimbo() + '.xlsx', total: linhas.length, comPos: linhas.length - semPos.length, semPos: semPos.length, lotes: lotes, ruas: ruas.length };
+    var hoje = new Date(), dd = String(hoje.getDate()).padStart(2, '0'), mm = String(hoje.getMonth() + 1).padStart(2, '0');
+    return { blob: blob, nome: 'Gestão Cubagem PE ' + dd + '-' + mm + ' BACKLOG.xlsx', total: linhas.length, comPos: linhas.length - semPos.length, semPos: semPos.length, lotes: lotes, ruas: ruas.length };
   }
 
   /* ===================== INTERFACE ===================== */
@@ -570,7 +591,7 @@
     $('c1').textContent = fmt(r.total); $('c2').textContent = fmt(r.comPos); $('c3').textContent = fmt(r.semPos); $('c4').textContent = fmt(r.lotes.length);
     $('clotes').innerHTML = r.lotes.map(function (l) {
       return '<div style="display:flex;gap:10px;align-items:flex-start;padding:7px 0;border-bottom:1px solid #f1f2f4"><span style="background:#' + CORES_LOTE[(l.n - 1) % CORES_LOTE.length] + ';border-radius:6px;padding:2px 8px;font-weight:700;color:#1f2328;white-space:nowrap">Lote ' + l.n + '</span>' +
-        '<span style="flex:1;color:#374151">' + escH(l.pedacos.map(function (p) { return p.rua.replace(/^BRFPE1-/, '') + (p.parte ? ' (' + p.parte + ')' : ''); }).join(', ')) + '</span><b style="color:' + (l.ok ? '#16a34a' : '#d97706') + '">' + l.total + '</b></div>';
+        '<span style="flex:1;color:#374151"><b style="color:#6b7280">' + escH(l.area) + ':</b> ' + escH(l.pedacos.map(function (p) { return p.rua.replace(/^BRFPE1-/, '') + (p.parte ? ' (' + p.parte + ')' : ''); }).join(', ')) + '</span><b style="color:' + (l.ok ? '#16a34a' : '#d97706') + '">' + l.total + '</b></div>';
     }).join('');
     cubUlt = r; $('cult').classList.add('on'); $('cultNome').textContent = r.nome;
     log('✅ Cubiscan: ' + r.lotes.length + ' lotes montados (' + fmt(r.comPos) + ' SKUs com posição, ' + fmt(r.semPos) + ' sem posição) → ' + r.nome, 'ok');
