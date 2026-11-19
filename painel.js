@@ -2,7 +2,7 @@
    Tudo roda no navegador de quem clicou, com o login dessa pessoa. Nenhum dado sai do PC. */
 (function () {
   'use strict';
-  var VERSAO = '1.4.0';
+  var VERSAO = '1.5.0';
   var ID = 'painel-qualidade-raiz';
   var ZONAS_PADRAO = ['AV', 'D', 'DEM', 'EXZO', 'MI', 'MO', 'OS', 'RO', 'TS', 'RTS'];
 
@@ -409,9 +409,9 @@
     var min = +cfg.cubMin || 150, max = +cfg.cubMax || 230;
     aviso('Montando a tabela de ruas…', 60);
     var porRua = {}, semPos = [];
-    linhas.forEach(function (l) {
+    linhas.forEach(function (l, n) {
       var loc = String(l[iPos] || '').trim();
-      var item = { sku: l[iSku], loc: loc, rua: ruaDe(loc), task: iTask >= 0 ? l[iTask] : '', cx: iCx >= 0 ? l[iCx] : '', pos2: iPos2 >= 0 ? l[iPos2] : '' };
+      var item = { i: n, sku: l[iSku], loc: loc, rua: ruaDe(loc), task: iTask >= 0 ? l[iTask] : '', cx: iCx >= 0 ? l[iCx] : '', pos2: iPos2 >= 0 ? l[iPos2] : '' };
       if (!loc) return semPos.push(item);
       (porRua[item.rua] = porRua[item.rua] || []).push(item);
     });
@@ -424,40 +424,56 @@
     lotes.forEach(function (l, i) { l.n = i + 1; });
     var loteDaRua = {};
     lotes.forEach(function (l) { l.pedacos.forEach(function (p) { (loteDaRua[p.rua] = loteDaRua[p.rua] || []).push(l.n); }); });
+    function nomeLote(n) { return 'Lote ' + String(n).padStart(2, '0'); }
+    var loteDaLinha = {};
+    lotes.forEach(function (l) { l.pedacos.forEach(function (p) { p.itens.forEach(function (it) { loteDaLinha[it.i] = nomeLote(l.n); }); }); });
     // procv: SKU / location / rua / lote (todas as linhas, inclusive sem posição)
-    var procv = linhas.map(function (l) {
-      var loc = String(l[iPos] || '').trim(), rua = loc ? ruaDe(loc) : '', ns = loteDaRua[rua] || [];
-      return [l[iSku], loc, rua, ns.length ? 'Lote ' + ns[0] : ''];
+    var procv = linhas.map(function (l, n) {
+      var loc = String(l[iPos] || '').trim();
+      return [l[iSku], loc, loc ? ruaDe(loc) : '', loteDaLinha[n] || 'Sem posição'];
     });
-    // Tabela dinâmica de verdade: linhas = rua, valores = CONT.VALORES de SKU (2 cliques abre o detalhe)
-    var unicas = Object.keys(procv.reduce(function (o, r) { o[r[2]] = 1; return o; }, {})).sort(function (a, b) { return a === b ? 0 : a < b ? -1 : 1; });
-    var idx = {}; unicas.forEach(function (u, k) { idx[u] = k; });
-    var cont = unicas.map(function () { return 0; }); procv.forEach(function (r) { cont[idx[r[2]]]++; });
-    var N = procv.length, K = unicas.length;
+    // Tabela dinâmica de verdade: linhas = Lote > rua, valores = COUNTA de SKU.
+    // 2 cliques no total do lote abre TODOS os SKUs do lote (todas as ruas juntas); na rua, só a rua.
+    function ordem(a, b) { return a === b ? 0 : a < b ? -1 : 1; }
+    var ruasU = Object.keys(procv.reduce(function (o, r) { o[r[2]] = 1; return o; }, {})).sort(ordem);
+    var lotesU = Object.keys(procv.reduce(function (o, r) { o[r[3]] = 1; return o; }, {})).sort(ordem);
+    var iRua = {}, iLote = {}; ruasU.forEach(function (u, k) { iRua[u] = k; }); lotesU.forEach(function (u, k) { iLote[u] = k; });
+    var porLote = {}, porLoteRua = {};
+    procv.forEach(function (r) { porLote[r[3]] = (porLote[r[3]] || 0) + 1; var k = r[3] + '\u0001' + r[2]; porLoteRua[k] = (porLoteRua[k] || 0) + 1; });
+    var N = procv.length, esc = function (v) { return escX(v).replace(/"/g, '&quot;'); };
     var definicao = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId1" refreshOnLoad="1" createdVersion="6" refreshedVersion="6" minRefreshableVersion="3" recordCount="' + N + '">' +
       '<cacheSource type="worksheet"><worksheetSource ref="A1:D' + (N + 1) + '" sheet="procv"/></cacheSource><cacheFields count="4">' +
       '<cacheField name="SKU" numFmtId="0"><sharedItems/></cacheField><cacheField name="location" numFmtId="0"><sharedItems containsBlank="1"/></cacheField>' +
-      '<cacheField name="rua" numFmtId="0"><sharedItems containsBlank="1" count="' + K + '">' + unicas.map(function (u) { return u ? '<s v="' + escX(u).replace(/"/g, '&quot;') + '"/>' : '<m/>'; }).join('') + '</sharedItems></cacheField>' +
-      '<cacheField name="lote" numFmtId="0"><sharedItems containsBlank="1"/></cacheField></cacheFields></pivotCacheDefinition>';
-    var q = function (v) { return v ? '<s v="' + escX(v).replace(/"/g, '&quot;') + '"/>' : '<m/>'; };
+      '<cacheField name="rua" numFmtId="0"><sharedItems containsBlank="1" count="' + ruasU.length + '">' + ruasU.map(function (u) { return u ? '<s v="' + esc(u) + '"/>' : '<m/>'; }).join('') + '</sharedItems></cacheField>' +
+      '<cacheField name="lote" numFmtId="0"><sharedItems count="' + lotesU.length + '">' + lotesU.map(function (u) { return '<s v="' + esc(u) + '"/>'; }).join('') + '</sharedItems></cacheField></cacheFields></pivotCacheDefinition>';
+    var q = function (v) { return v ? '<s v="' + esc(v) + '"/>' : '<m/>'; };
     var registros = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?><pivotCacheRecords xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" count="' + N + '">'];
-    procv.forEach(function (r) { registros.push('<r>' + q(r[0]) + q(r[1]) + '<x v="' + idx[r[2]] + '"/>' + q(r[3]) + '</r>'); });
+    procv.forEach(function (r) { registros.push('<r>' + q(r[0]) + q(r[1]) + '<x v="' + iRua[r[2]] + '"/><x v="' + iLote[r[3]] + '"/></r>'); });
     registros.push('</pivotCacheRecords>');
-    var tabela = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="TabelaDinamica1" cacheId="1" applyNumberFormats="0" applyBorderFormats="0" applyFontFormats="0" applyPatternFormats="0" applyAlignmentFormats="0" applyWidthHeightFormats="1" dataCaption="Valores" updatedVersion="6" minRefreshableVersion="3" useAutoFormatting="1" itemPrintTitles="1" createdVersion="6" indent="0" outline="1" outlineData="1" rowHeaderCaption="rua">' +
-      '<location ref="A1:B' + (K + 2) + '" firstHeaderRow="1" firstDataRow="1" firstDataCol="1"/><pivotFields count="4"><pivotField dataField="1" showAll="0"/><pivotField showAll="0"/>' +
-      '<pivotField axis="axisRow" showAll="0"><items count="' + (K + 1) + '">' + unicas.map(function (_, k) { return '<item x="' + k + '"/>'; }).join('') + '<item t="default"/></items></pivotField><pivotField showAll="0"/></pivotFields>' +
-      '<rowFields count="1"><field x="2"/></rowFields><rowItems count="' + (K + 1) + '">' + unicas.map(function (_, k) { return k ? '<i><x v="' + k + '"/></i>' : '<i><x/></i>'; }).join('') + '<i t="grand"><x/></i></rowItems>' +
+    var x = function (v) { return v ? '<x v="' + v + '"/>' : '<x/>'; };
+    var itensLinha = [], linPiv = [], tipoLinha = [];
+    lotesU.forEach(function (lt) {
+      itensLinha.push('<i>' + x(iLote[lt]) + '</i>'); linPiv.push([lt, String(porLote[lt]), lt]); tipoLinha.push('lote');
+      ruasU.filter(function (ru) { return porLoteRua[lt + '\u0001' + ru]; }).forEach(function (ru) {
+        itensLinha.push('<i r="1">' + x(iRua[ru]) + '</i>'); linPiv.push([ru || '(vazio)', String(porLoteRua[lt + '\u0001' + ru]), lt]); tipoLinha.push('rua');
+      });
+    });
+    itensLinha.push('<i t="grand"><x/></i>'); linPiv.push(['Grand Total', String(N), '']); tipoLinha.push('total');
+    var L = linPiv.length;
+    var tabela = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="TabelaDinamica1" cacheId="1" applyNumberFormats="0" applyBorderFormats="0" applyFontFormats="0" applyPatternFormats="0" applyAlignmentFormats="0" applyWidthHeightFormats="1" dataCaption="Valores" updatedVersion="6" minRefreshableVersion="3" useAutoFormatting="1" itemPrintTitles="1" createdVersion="6" indent="2" outline="1" outlineData="1" rowHeaderCaption="Lote / rua">' +
+      '<location ref="A1:B' + (L + 1) + '" firstHeaderRow="1" firstDataRow="1" firstDataCol="1"/><pivotFields count="4"><pivotField dataField="1" showAll="0"/><pivotField showAll="0"/>' +
+      '<pivotField axis="axisRow" showAll="0"><items count="' + (ruasU.length + 1) + '">' + ruasU.map(function (_, k) { return '<item x="' + k + '"/>'; }).join('') + '<item t="default"/></items></pivotField>' +
+      '<pivotField axis="axisRow" showAll="0"><items count="' + (lotesU.length + 1) + '">' + lotesU.map(function (_, k) { return '<item x="' + k + '"/>'; }).join('') + '<item t="default"/></items></pivotField></pivotFields>' +
+      '<rowFields count="2"><field x="3"/><field x="2"/></rowFields><rowItems count="' + itensLinha.length + '">' + itensLinha.join('') + '</rowItems>' +
       '<colItems count="1"><i/></colItems><dataFields count="1"><dataField name="COUNTA of SKU" fld="0" subtotal="count" baseField="0" baseItem="0"/></dataFields>' +
       '<pivotTableStyleInfo name="PivotStyleLight16" showRowHeaders="1" showColHeaders="1" showRowStripes="0" showColStripes="0" showLastColumn="1"/></pivotTableDefinition>';
-    var linPiv = unicas.map(function (u, k) { var ns = loteDaRua[u] || []; return [u, String(cont[k]), { f: 'IFERROR(VLOOKUP(A' + (k + 2) + ',procv!$C:$D,2,FALSE),"")', v: ns.length ? 'Lote ' + ns[0] : '' }]; });
-    linPiv.push(['Grand Total', String(N), '']);
-    var cf = '<conditionalFormatting sqref="A2:C' + (K + 1) + '">' + CORES_LOTE.map(function (_, c) {
-      return '<cfRule type="expression" dxfId="' + c + '" priority="' + (c + 1) + '"><formula>AND($C2&lt;&gt;"",MOD(VALUE(SUBSTITUTE($C2,"Lote ",""))-1,' + CORES_LOTE.length + ')=' + c + ')</formula></cfRule>';
+    var cf = '<conditionalFormatting sqref="A2:C' + L + '">' + CORES_LOTE.map(function (_, c) {
+      return '<cfRule type="expression" dxfId="' + c + '" priority="' + (c + 1) + '"><formula>AND(LEFT($C2,5)="Lote ",MOD(VALUE(MID($C2,6,3))-1,' + CORES_LOTE.length + ')=' + c + ')</formula></cfRule>';
     }).join('') + '</conditionalFormatting>';
-    var abaPivot = { nome: 'Tabela dinâmica', cab: ['rua', 'COUNTA of SKU', 'Lote'], linhas: linPiv, pivot: { definicao: definicao, registros: registros, tabela: tabela },
-      op: { semFiltro: true, cf: cf, estilo: function (k) { return k === K ? 9 : 0; } } };
+    var abaPivot = { nome: 'Tabela dinâmica', cab: ['Lote / rua', 'COUNTA of SKU', 'Lote'], linhas: linPiv, pivot: { definicao: definicao, registros: registros, tabela: tabela },
+      op: { semFiltro: true, cf: cf, estilo: function (k) { return tipoLinha[k] === 'total' ? 9 : tipoLinha[k] === 'lote' ? 8 : 0; } } };
     var resumoLotes = { nome: 'Lotes', cab: ['Lote', 'Área', 'SKUs', 'Ruas', 'Dentro da faixa?'], linhas: lotes.map(function (l) {
-      return ['Lote ' + l.n, l.area, String(l.total), l.pedacos.map(function (p) { return p.rua + (p.parte ? ' (parte ' + p.parte + ')' : ''); }).join(', '), l.ok ? 'Sim' : (l.total < min ? 'Abaixo de ' + min : 'Acima de ' + max)];
+      return [nomeLote(l.n), l.area, String(l.total), l.pedacos.map(function (p) { return p.rua + (p.parte ? ' (parte ' + p.parte + ')' : ''); }).join(', '), l.ok ? 'Sim' : (l.total < min ? 'Abaixo de ' + min : 'Acima de ' + max)];
     }), op: { semFiltro: true, estilo: function (k) { return 2 + k % CORES_LOTE.length; } } };
     aviso('Gerando a planilha…', 85);
     var blob = await gerarXLSX([abaPivot, resumoLotes,
