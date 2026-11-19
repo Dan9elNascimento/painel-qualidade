@@ -2,7 +2,7 @@
    Tudo roda no navegador de quem clicou, com o login dessa pessoa. Nenhum dado sai do PC. */
 (function () {
   'use strict';
-  var VERSAO = '1.6.0';
+  var VERSAO = '1.6.2';
   var ID = 'painel-qualidade-raiz';
   var ZONAS_PADRAO = ['AV', 'D', 'DEM', 'EXZO', 'MI', 'MO', 'OS', 'RO', 'TS', 'RTS'];
 
@@ -731,20 +731,39 @@
     inp.dispatchEvent(new Event('input', { bubbles: true })); inp.dispatchEvent(new Event('change', { bubbles: true }));
     inp.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: '1' })); inp.blur(); inp.dispatchEvent(new Event('blur', { bubbles: true }));
   }
-  async function porPagina200() {
-    var cands = [].filter.call(document.querySelectorAll('div,span,input'), function (el) {
-      return visivel(el) && el.children.length <= 3 && /^\s*\d+\s*\/\s*(page|pá|pag|pa)/i.test(textoDe(el) || el.value || '') && !el.closest('#' + ID);
+  function seletorPagina() {
+    var cands = [].filter.call(document.querySelectorAll('span,div,input'), function (el) {
+      var t = el.tagName === 'INPUT' ? el.value : textoDe(el);
+      return visivel(el) && !el.closest('#' + ID) && el.querySelectorAll('*').length <= 3 && /^\s*\d+\s*\/\s*(page|pá|pag|pa)/i.test(t || '');
     });
-    var atual = cands[cands.length - 1];
-    if (!atual) return 'sem seletor';
-    if (/^\s*200\s*\//.test(textoDe(atual) || atual.value || '')) return 'já está em 200';
-    clicar(atual); var sel = atual.closest('[class*=select]'); if (sel) clicar(sel);
-    for (var t = 0; t < 15; t++) {
-      await esperar(200);
-      var op = [].filter.call(document.querySelectorAll('li,div[class*=option],div[class*=item]'), function (el) { return visivel(el) && /^\s*200\s*\/\s*\w*/i.test(textoDe(el)) && el.children.length <= 2; })[0];
-      if (op) { clicar(op); await esperar(1500); return 'mudou para 200'; }
+    return cands[cands.length - 1] || null;
+  }
+  async function porPagina200() {
+    for (var tentativa = 0; tentativa < 3; tentativa++) {
+      var atual = seletorPagina();
+      if (!atual) return 'sem seletor';
+      if (/^\s*200\s*\//.test(textoDe(atual) || atual.value || '')) return 'ok';
+      // abre o seletor: sobe até a "caixa" do select (antd/ssc abrem no mousedown da caixa)
+      var caixa = atual, k = 0;
+      while (caixa.parentElement && k++ < 4 && !/(select|selector)(?![-_]?(item|selection-item|placeholder))/i.test(caixa.className || '')) caixa = caixa.parentElement;
+      [atual, caixa].forEach(clicar);
+      for (var t = 0; t < 15; t++) {
+        await esperar(200);
+        var op = [].filter.call(document.querySelectorAll('li,div,span'), function (el) {
+          return visivel(el) && !el.closest('#' + ID) && el !== atual && !el.contains(atual) && el.querySelectorAll('*').length <= 2 && /^\s*200\s*\/\s*\w+\s*$/i.test(textoDe(el));
+        }).pop();
+        if (op) { clicar(op); var item = op.closest('[class*=option],[role=option],li'); if (item && item !== op) clicar(item); break; }
+      }
+      await esperar(1500);
     }
-    return 'não achei a opção 200';
+    var fim = seletorPagina();
+    return fim && /^\s*200\s*\//.test(textoDe(fim) || fim.value || '') ? 'ok' : 'falhou';
+  }
+  function botaoProxima() {
+    var b = [].filter.call(document.querySelectorAll('[class*=pagination] [class*=next], [class*=pager] [class*=next], button[aria-label*=next i], li[title*=Next], [class*=next-page]'), function (el) { return visivel(el) && !el.closest('#' + ID); })[0];
+    if (!b) return null;
+    var desab = b.matches('[disabled],[aria-disabled=true],[class*=disabled]') || !!b.closest('[class*=disabled]');
+    return desab ? null : (b.querySelector('button,a') || b);
   }
   function inputsPutaway() {
     var th = [].filter.call(document.querySelectorAll('th'), function (el) { return /suggested\s*putaway\s*qty|putaway\s*sugerid/i.test(textoDe(el)); })[0];
@@ -777,30 +796,39 @@
     var estava = minimizado; minimizar();
     try {
       if (!inputsPutaway()) throw new Error('Abra a tela Rack Transfer → Create com a lista de SKUs antes.');
-      rAviso('Mostrando 200 por página…', 10); var pg = await porPagina200(); log('Rack Transfer: página — ' + pg);
-      var its = inputsPutaway() || [];
-      $('r1').textContent = fmt(its.length);
-      its.forEach(function (x, k) { definirValor(x.inp, '1'); if (k % 10 === 0) rAviso('Colocando 1… (' + (k + 1) + '/' + its.length + ')', 20 + 50 * k / its.length); });
-      await esperar(800);
-      var ok = (inputsPutaway() || []).filter(function (x) { return x.inp.value === '1'; }).length;
-      $('r2').textContent = fmt(ok);
-      var avisos = linhasComAviso(); $('r3').textContent = fmt(avisos.length);
-      var removidos = 0;
-      if (avisos.length && $('rremover').checked) {
-        if (confirm('Painel Qualidade\n\n' + avisos.length + ' SKU(s) estão com "More than Suggested Pick Qty".\nRemover esses SKUs da tarefa?')) {
-          for (var t = 0; t < avisos.length + 5; t++) {
-            var tr = linhasComAviso()[0]; if (!tr) break;
-            var rem = [].filter.call(tr.querySelectorAll('a,button,span'), function (el) { return /^(remove|remover)$/i.test(textoDe(el)); })[0];
-            if (!rem) { log('⚠️ Não achei o botão Remove numa linha.', 'er'); break; }
-            rAviso('Removendo SKUs com aviso… (' + (removidos + 1) + '/' + avisos.length + ')', 75 + 20 * removidos / avisos.length);
-            clicar(rem); await confirmarPopup(); removidos++;
-            await esperar(1500);
-          }
+      rAviso('Mostrando 200 por página…', 10); var pg = await porPagina200();
+      log(pg === 'ok' ? 'Rack Transfer: 200 por página ✓' : '⚠️ Não consegui mudar para 200 por página — vou página por página.', pg === 'ok' ? '' : 'er');
+      var vistos = {}, avisados = {}, removidos = 0, perguntou = false, podeRemover = $('rremover').checked;
+      function chave(tr) { return textoDe(tr.cells[0] || tr).slice(0, 60); }
+      for (var pagina = 1; pagina <= 40; pagina++) {
+        // Repete até a página ficar estável: tudo com 1 e sem aviso (removendo quem continua com aviso)
+        for (var rodada = 0; rodada < 300; rodada++) {
+          var its = inputsPutaway() || [], mudou = false;
+          its.forEach(function (x) { vistos[chave(x.tr)] = 1; if (x.inp.value !== '1') { definirValor(x.inp, '1'); mudou = true; } });
+          rAviso('Página ' + pagina + ': ' + Object.keys(vistos).length + ' SKUs com 1 unidade…', Math.min(70, 20 + Object.keys(vistos).length / 3));
+          if (mudou) { await esperar(800); continue; }
+          // Com aviso mesmo já estando com 1 → remove
+          var tr = linhasComAviso().filter(function (l) { var i = l.querySelector('input:not([disabled]):not([readonly])'); return !i || i.value === '1'; })[0];
+          if (!tr) break;
+          avisados[chave(tr)] = 1;
+          if (!podeRemover) break;
+          if (!perguntou) { perguntou = true; podeRemover = confirm('Painel Qualidade\n\nTem SKU com "More than Suggested Pick Qty" mesmo com 1 unidade.\nRemover esses SKUs da tarefa?'); if (!podeRemover) break; }
+          var rem = [].filter.call(tr.querySelectorAll('a,button,span'), function (el) { return /^(remove|remover)$/i.test(textoDe(el)); })[0];
+          if (!rem) { log('⚠️ Não achei o botão Remove numa linha.', 'er'); break; }
+          rAviso('Removendo SKU com aviso… (' + (removidos + 1) + ')', 75);
+          clicar(rem); await confirmarPopup(); removidos++;
+          await esperar(1500);
         }
+        if (pg === 'ok') break;
+        var prox = botaoProxima(); if (!prox) break;
+        clicar(prox); await esperar(1500);
       }
+      var total = Object.keys(vistos).length, ok = total - removidos, comAviso = Object.keys(avisados).length;
+      linhasComAviso().forEach(function (l) { avisados[chave(l)] = 1; }); comAviso = Object.keys(avisados).length;
+      $('r1').textContent = fmt(total); $('r2').textContent = fmt(ok); $('r3').textContent = fmt(comAviso);
       $('r4').textContent = fmt(removidos);
       rAviso('✅ Pronto: ' + ok + ' com 1 unidade' + (removidos ? ', ' + removidos + ' removido(s)' : '') + '. Confira e clique em Confirm Task.', 100);
-      log('✅ Rack Transfer: ' + ok + ' ajustados para 1, ' + avisos.length + ' com aviso, ' + removidos + ' removidos.', 'ok');
+      log('✅ Rack Transfer: ' + ok + ' ajustados para 1, ' + comAviso + ' com aviso, ' + removidos + ' removidos.', 'ok');
     } catch (e) { rAviso('❌ ' + e.message, null); log('❌ ' + e.message, 'er'); restaurar(); }
     b.disabled = false; b.textContent = '🔁 Ajustar tudo';
     if (!estava && false) restaurar();
