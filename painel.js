@@ -2,7 +2,7 @@
    Tudo roda no navegador de quem clicou, com o login dessa pessoa. Nenhum dado sai do PC. */
 (function () {
   'use strict';
-  var VERSAO = '1.6.5';
+  var VERSAO = '1.7.2';
   var ID = 'painel-qualidade-raiz';
   var ZONAS_PADRAO = ['AV', 'D', 'DEM', 'EXZO', 'MI', 'MO', 'OS', 'RO', 'TS', 'RTS'];
 
@@ -741,26 +741,57 @@
   function visivel(el) { return !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length)); }
   function textoDe(el) { return (el.textContent || '').replace(/\s+/g, ' ').trim(); }
   function clicar(el) { ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(function (t) { el.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window })); }); }
-  function cliqueFora(inp) {   // "1 clique do lado de fora": na célula do SKU da mesma linha (lugar neutro)
-    var tr = inp && inp.closest('tr'), alvo = tr && tr.cells && tr.cells[0];
-    if (alvo) { var t = alvo.querySelector('div,span') || alvo; ['mousedown', 'mouseup', 'click'].forEach(function (n) { t.dispatchEvent(new MouseEvent(n, { bubbles: true, cancelable: true, view: window })); }); }
-    else document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+  function linhaDe(el) { return el.closest('tr,[class*=table-row],[class*=-row]') || el.parentElement; }
+  function cliqueFora(inp) {   // "1 clique do lado de fora": no texto do SKU da mesma linha (lugar neutro)
+    var linha = linhaDe(inp), alvo = linha && (linha.cells ? linha.cells[0] : linha.firstElementChild);
+    var t = alvo && alvo !== inp && !alvo.contains(inp) ? (alvo.querySelector('div,span') || alvo) : document.body;
+    ['mousedown', 'mouseup', 'click'].forEach(function (n) { t.dispatchEvent(new MouseEvent(n, { bubbles: true, cancelable: true, view: window })); });
   }
-  function definirValor(inp, v) {
-    // Digita como uma pessoa: seleciona tudo, digita o valor e clica fora
-    inp.focus(); clicar(inp);
-    try { inp.select(); } catch (e) {}
-    var digitou = false;
-    try { digitou = document.execCommand('insertText', false, v); } catch (e) {}
-    if (!digitou || inp.value !== v) {
-      var set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-      set.call(inp, v);
-      inp.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: v }));
-      inp.dispatchEvent(new Event('change', { bubbles: true }));
+  var setValorNativo = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+  function tentativaDigitar(inp, v) { inp.focus(); try { inp.select(); } catch (e) {} try { document.execCommand('insertText', false, v); } catch (e) {} }
+  function tentativaNativa(inp, v) {
+    inp.focus(); setValorNativo.call(inp, v);
+    inp.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: v }));
+    inp.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  function tentativaReact(inp, v) {   // chama o onChange do React direto
+    var k = Object.keys(inp).filter(function (x) { return x.indexOf('__reactProps$') === 0 || x.indexOf('__reactEventHandlers$') === 0; })[0];
+    if (!k) return false;
+    var pr = inp[k]; setValorNativo.call(inp, v);
+    var ev = { target: inp, currentTarget: inp, type: 'change', nativeEvent: new Event('input'), preventDefault: function () {}, stopPropagation: function () {}, persist: function () {} };
+    if (pr.onChange) pr.onChange(ev); if (pr.onInput) pr.onInput(ev); if (pr.onBlur) pr.onBlur(Object.assign({}, ev, { type: 'blur' }));
+    return true;
+  }
+  function tentativaVue(inp, v) {    // Vue 2 / Vue 3: avisa o componente do novo valor
+    var n = Number(v), feito = false;
+    for (var el = inp, k = 0; el && k < 6; el = el.parentElement, k++) {
+      var vm = el.__vue__;
+      if (vm) { ['input', 'change', 'update:value', 'update:modelValue'].forEach(function (e) { try { vm.$emit(e, n); feito = true; } catch (x) {} }); break; }
+      var ci = el.__vueParentComponent;
+      if (ci) {
+        for (var c = ci, j = 0; c && j < 4; c = c.parent, j++) {
+          var props = (c.vnode && c.vnode.props) || {};
+          ['onUpdate:modelValue', 'onUpdate:value', 'onChange', 'onInput'].forEach(function (h) { if (typeof props[h] === 'function') { try { props[h](n); feito = true; } catch (x) {} } });
+          if (feito) break;
+        }
+        break;
+      }
     }
-    inp.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: v }));
-    inp.blur(); inp.dispatchEvent(new FocusEvent('blur')); inp.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
-    cliqueFora(inp);
+    return feito;
+  }
+  function blur(inp) { inp.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: '1' })); inp.blur(); inp.dispatchEvent(new FocusEvent('blur')); inp.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); cliqueFora(inp); }
+  var metodoBom = null;   // o que funcionar na 1ª vez é usado nos próximos
+  async function definirValor(inp, v) {
+    var metodos = [['digitar', tentativaDigitar], ['nativo', tentativaNativa], ['react', tentativaReact], ['vue', tentativaVue]];
+    if (metodoBom) metodos.sort(function (a, b) { return (b[0] === metodoBom) - (a[0] === metodoBom); });
+    for (var i = 0; i < metodos.length; i++) {
+      if (metodos[i][1](inp, v) === false) continue;
+      blur(inp);
+      await esperar(metodoBom ? 60 : 350);
+      if (inp.isConnected && inp.value === v) { await esperar(metodoBom ? 0 : 250); if (inp.value === v) { if (!metodoBom) { metodoBom = metodos[i][0]; log('Rack Transfer: o WMS aceitou o valor pelo método "' + metodoBom + '".'); } return true; } }
+      if (!inp.isConnected) return true;   // a linha foi redesenhada: confere na próxima rodada
+    }
+    return false;
   }
   function seletorPagina() {
     var cands = [].filter.call(document.querySelectorAll('span,div,input'), function (el) {
@@ -823,32 +854,41 @@
     var desab = b.matches('[disabled],[aria-disabled=true],[class*=disabled]') || !!b.closest('[class*=disabled]');
     return desab ? null : (b.querySelector('button,a') || b);
   }
-  function inputsPutaway() {
-    var th = [].filter.call(document.querySelectorAll('th,[class*=header-cell],[class*=table-cell]'), function (el) {
-      return visivel(el) && !el.closest('#' + ID) && /suggested\s*putaway\s*qty|putaway\s*sugerid/i.test(textoDe(el)) && textoDe(el).length < 40;
-    }).pop();
-    if (!th) return null;
-    var c = th.getBoundingClientRect(), res = [], vistos = new Set();
-    [].forEach.call(document.querySelectorAll('input'), function (inp) {
-      if (inp.disabled || inp.readOnly || !visivel(inp) || inp.closest('#' + ID) || inp.type === 'checkbox' || inp.type === 'radio') return;
-      var r = inp.getBoundingClientRect(), meio = (r.left + r.right) / 2;
-      if (meio < c.left - 5 || meio > c.right + 5 || inp.closest('thead')) return;
-      var tr = inp.closest('tr') || inp.parentElement;
-      if (vistos.has(tr)) return; vistos.add(tr);
-      res.push({ tr: tr, inp: inp });
+  function cabecalhoPutaway() {
+    var cands = [].filter.call(document.querySelectorAll('th,div,span'), function (el) {
+      return visivel(el) && !el.closest('#' + ID) && /^\s*(suggested\s*putaway\s*qty|qtd\.?\s*putaway\s*sugerid\w*)\s*$/i.test(textoDe(el));
     });
-    if (res.length) return res;
-    // Plano B: pela posição da coluna no cabeçalho (quando cabeçalho e corpo são a mesma tabela)
-    var col = th.cellIndex, tabela = th.closest('table'), base = tabela ? tabela.parentElement : document;
-    for (var k = 0; k < 5 && base && !base.querySelector('tbody tr td input'); k++) base = base.parentElement;
-    [].forEach.call((base || document).querySelectorAll('tbody tr'), function (tr) {
-      var td = tr.cells[col], inp = td && td.querySelector('input:not([disabled]):not([readonly])');
-      if (inp && visivel(inp)) res.push({ tr: tr, inp: inp });
+    var el = cands[cands.length - 1];
+    return el ? (el.closest('th,[class*=header-cell],[class*=cell]') || el) : null;
+  }
+  function inputsPutaway() {
+    var th = cabecalhoPutaway();
+    if (!th) return null;
+    var c = th.getBoundingClientRect(), res = [];
+    [].forEach.call(document.querySelectorAll('input'), function (inp) {
+      if (inp.disabled || inp.readOnly || !visivel(inp) || inp.closest('#' + ID) || /checkbox|radio|hidden/.test(inp.type) || inp.closest('thead,[class*=pagination],[class*=pager]')) return;
+      var r = inp.getBoundingClientRect(), meio = (r.left + r.right) / 2;
+      if (meio < c.left - 5 || meio > c.right + 5) return;
+      res.push({ tr: linhaDe(inp), inp: inp });
     });
     return res;
   }
+  function linhaSegura(el) {   // a linha de verdade: tem exatamente 1 botão Remove (nunca a tabela inteira)
+    for (var l = el.parentElement, k = 0; l && k < 10; l = l.parentElement, k++) {
+      var rems = [].filter.call(l.querySelectorAll('a,button,span'), function (x) { return /^(remove|remover)$/i.test(textoDe(x)); });
+      if (rems.length === 1) return l.closest('tr') || l;
+      if (rems.length > 1) return null;
+    }
+    return null;
+  }
   function linhasComAviso() {
-    return [].filter.call(document.querySelectorAll('tbody tr'), function (tr) { return visivel(tr) && /more than suggested pick qty/i.test(textoDe(tr)); });
+    var vistas = [];
+    [].forEach.call(document.querySelectorAll('div,span,p'), function (el) {
+      var t = textoDe(el);
+      if (t.length > 80 || !visivel(el) || el.closest('#' + ID) || !/more than suggested pick qty/i.test(t)) return;
+      var l = linhaSegura(el); if (l && vistas.indexOf(l) < 0) vistas.push(l);
+    });
+    return vistas;
   }
   async function confirmarPopup() {
     for (var t = 0; t < 8; t++) {
@@ -861,36 +901,51 @@
     return false;
   }
   function rAviso(t, pct) { $('rprog').classList.add('on'); $('rst').textContent = t; if (pct != null) $('rbarra').style.width = Math.min(100, pct) + '%'; $('pilSt').textContent = '· ' + t; }
+  var rtRodando = false, rtCancelar = false;
   $('rgo').onclick = async function () {
-    var b = $('rgo'); b.disabled = true; b.textContent = '⏳ Ajustando…';
-    var estava = minimizado; minimizar();
+    if (rtRodando) { rtCancelar = true; $('rgo').textContent = '⏹ Parando…'; return; }
+    rtRodando = true; rtCancelar = false; metodoBom = null;
+    var b = $('rgo'); b.textContent = '⏹ Parar';
+    minimizar();
+    var inicio = Date.now(), LIMITE = 4 * 60 * 1000;
+    function tempoEsgotado() { return rtCancelar || Date.now() - inicio > LIMITE; }
     try {
-      if (!inputsPutaway()) throw new Error('Abra a tela Rack Transfer → Create com a lista de SKUs antes.');
+      if (!cabecalhoPutaway()) throw new Error('Abra a tela Rack Transfer → Create com a lista de SKUs antes.');
       rAviso('Mostrando 200 por página…', 10); var pg = await porPagina200();
       log(pg === 'ok' ? 'Rack Transfer: 200 por página ✓' : '⚠️ Não consegui mudar para 200 por página — vou página por página.', pg === 'ok' ? '' : 'er');
-      var vistos = {}, avisados = {}, removidos = 0, perguntou = false, podeRemover = $('rremover').checked;
-      function chave(tr) { return textoDe(tr.cells[0] || tr).slice(0, 60); }
-      for (var pagina = 1; pagina <= 40; pagina++) {
-        // Repete até a página ficar estável: tudo com 1 e sem aviso (removendo quem continua com aviso)
-        var ultimaFalta = -1, semMudar = 0;
-        for (var rodada = 0; rodada < 300; rodada++) {
-          var its = inputsPutaway() || [], mudou = false, faltam = 0;
-          if (rodada === 0) log('Página ' + pagina + ': achei ' + its.length + ' campos de Suggested Putaway Qty.');
-          its.forEach(function (x) { vistos[chave(x.tr)] = 1; if (x.inp.value !== '1') { definirValor(x.inp, '1'); mudou = true; } });
-          its.forEach(function (x) { if (x.inp.value !== '1') faltam++; });
-          if (mudou && faltam && faltam === ultimaFalta) { semMudar++; } else semMudar = 0;
-          ultimaFalta = faltam;
-          if (semMudar >= 3) { log('⚠️ O WMS não aceitou o valor 1 em ' + faltam + ' campo(s). Me mande um print.', 'er'); break; }
-          rAviso('Página ' + pagina + ': ' + Object.keys(vistos).length + ' SKUs com 1 unidade…', Math.min(70, 20 + Object.keys(vistos).length / 3));
-          if (mudou) { await esperar(800); continue; }
-          // Com aviso mesmo já estando com 1 → remove
-          var tr = linhasComAviso().filter(function (l) { var i = l.querySelector('input:not([disabled]):not([readonly])'); return !i || i.value === '1'; })[0];
-          if (!tr) break;
-          avisados[chave(tr)] = 1;
-          if (!podeRemover) break;
-          if (!perguntou) { perguntou = true; podeRemover = confirm('Painel Qualidade\n\nTem SKU com "More than Suggested Pick Qty" mesmo com 1 unidade.\nRemover esses SKUs da tarefa?'); if (!podeRemover) break; }
-          var rem = [].filter.call(tr.querySelectorAll('a,button,span'), function (el) { return /^(remove|remover)$/i.test(textoDe(el)); })[0];
-          if (!rem) { log('⚠️ Não achei o botão Remove numa linha.', 'er'); break; }
+      var total = 0, ok = 0, falhou = 0, removidos = 0, comAviso = 0, perguntou = false, podeRemover = $('rremover').checked;
+      for (var pagina = 1; pagina <= 40 && !tempoEsgotado(); pagina++) {
+        // 1) coloca 1 em todos (cada campo no máximo 2 tentativas)
+        var its = inputsPutaway() || [];
+        log('Página ' + pagina + ': achei ' + its.length + ' campos de Suggested Putaway Qty.');
+        total += its.length;
+        for (var k = 0; k < its.length && !tempoEsgotado(); k++) {
+          its = inputsPutaway() || its;          // a tela pode redesenhar depois de cada valor: busca de novo
+          if (k >= its.length) break;
+          var x = its[k];
+          if (x.inp.value !== '1' && !(await definirValor(x.inp, '1'))) { if (!(await definirValor(x.inp, '1'))) falhou++; else ok++; } else ok++;
+          if (k % 5 === 0) rAviso('Página ' + pagina + ': ' + (k + 1) + '/' + its.length + ' com 1 unidade…', 15 + 55 * k / Math.max(its.length, 1));
+        }
+        if (falhou && falhou === its.length) throw new Error('O WMS não aceitou o valor 1 em nenhum campo. Me mande um print deste painel.');
+        await esperar(600);
+        // 2) se o aviso continuar mesmo com 1 → remove (no máximo 1 vez por linha)
+        var tentadas = {};
+        function skuDa(l) { var m = textoDe(l).match(/\[?(\d{6,}_\d{3,})\]?/); return m ? m[1] : textoDe(l).slice(0, 50); }
+        function linhaDoSku(sku) { return linhasComAviso().filter(function (l) { return skuDa(l) === sku; })[0]; }
+        for (var t = 0; t < 250 && !tempoEsgotado(); t++) {
+          var linha = linhasComAviso().filter(function (l) { return !tentadas[skuDa(l)]; })[0];
+          if (!linha) break;
+          var sku = skuDa(linha); tentadas[sku] = 1; comAviso++;
+          var inpL = linha.querySelector('input:not([disabled]):not([readonly])');
+          if (inpL && inpL.value !== '1') { await definirValor(inpL, '1'); await esperar(500); linha = linhaDoSku(sku); if (!linha) { comAviso--; continue; } }
+          if (!podeRemover) continue;
+          if (!perguntou) { perguntou = true; podeRemover = confirm('Painel Qualidade\n\nTem SKU com "More than Suggested Pick Qty" mesmo com 1 unidade.\nRemover esses SKUs da tarefa?'); if (!podeRemover) continue; }
+          linha = linhaDoSku(sku); if (!linha) { comAviso--; continue; }   // confere de novo, na hora de remover
+          var inpC = linha.querySelector('input:not([disabled]):not([readonly])');
+          if (inpC && inpC.value !== '1') { log('⚠️ ' + sku + ' não ficou com 1 — não removi.', 'er'); continue; }
+          var rems = [].filter.call(linha.querySelectorAll('a,button,span'), function (el) { return /^(remove|remover)$/i.test(textoDe(el)); });
+          if (rems.length !== 1 || !/more than suggested pick qty/i.test(textoDe(linha))) { log('⚠️ Pulei uma linha (não consegui confirmar qual é o Remove dela).', 'er'); continue; }
+          var rem = rems[0];
           rAviso('Removendo SKU com aviso… (' + (removidos + 1) + ')', 75);
           clicar(rem); await confirmarPopup(); removidos++;
           await esperar(1500);
@@ -899,15 +954,13 @@
         var prox = botaoProxima(); if (!prox) break;
         clicar(prox); await esperar(1500);
       }
-      var total = Object.keys(vistos).length, ok = total - removidos, comAviso = Object.keys(avisados).length;
-      linhasComAviso().forEach(function (l) { avisados[chave(l)] = 1; }); comAviso = Object.keys(avisados).length;
-      $('r1').textContent = fmt(total); $('r2').textContent = fmt(ok); $('r3').textContent = fmt(comAviso);
-      $('r4').textContent = fmt(removidos);
-      rAviso('✅ Pronto: ' + ok + ' com 1 unidade' + (removidos ? ', ' + removidos + ' removido(s)' : '') + '. Confira e clique em Confirm Task.', 100);
-      log('✅ Rack Transfer: ' + ok + ' ajustados para 1, ' + comAviso + ' com aviso, ' + removidos + ' removidos.', 'ok');
+      $('r1').textContent = fmt(total); $('r2').textContent = fmt(ok); $('r3').textContent = fmt(comAviso); $('r4').textContent = fmt(removidos);
+      var fimTxt = rtCancelar ? '⏹ Parado por você.' : (Date.now() - inicio > LIMITE ? '⏱ Parei pelo tempo limite.' : '✅ Pronto:');
+      rAviso(fimTxt + ' ' + ok + ' com 1 unidade' + (falhou ? ', ' + falhou + ' não aceitaram' : '') + (removidos ? ', ' + removidos + ' removido(s)' : '') + '. Confira e clique em Confirm Task.', 100);
+      log('Rack Transfer: ' + total + ' campos, ' + ok + ' com 1, ' + falhou + ' não aceitaram, ' + comAviso + ' com aviso, ' + removidos + ' removidos (' + Math.round((Date.now() - inicio) / 1000) + 's).', falhou ? 'er' : 'ok');
+      if (falhou) restaurar();
     } catch (e) { rAviso('❌ ' + e.message, null); log('❌ ' + e.message, 'er'); restaurar(); }
-    b.disabled = false; b.textContent = '🔁 Ajustar tudo';
-    if (!estava && false) restaurar();
+    rtRodando = false; b.textContent = '🔁 Ajustar tudo';
   };
 
   function preencherCfg() { $('zonas').value = cfg.zonas.join('\n'); $('dup').checked = !!cfg.dup; $('zres').innerHTML = cfg.zonas.map(function (z) { return '<div class="zr"><b>—</b>' + escH(z) + '</div>'; }).join(''); }
