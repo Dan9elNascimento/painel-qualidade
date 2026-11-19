@@ -19,7 +19,7 @@ import urllib.parse
 import urllib.request
 import base64
 
-VERSAO = "1.2.0"
+VERSAO = "1.3.0"
 PORTA = int(os.environ.get("PAINEL_PORTA", "9333"))
 WMS_URL = os.environ.get("PAINEL_WMS_URL", "https://wms.ssc.shopee.com.br/")
 WMS_HOST = urllib.parse.urlparse(WMS_URL).hostname
@@ -229,7 +229,29 @@ INJETAR = ("(function(){try{if(window.top!==window||location.hostname!==%s)retur
            "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',go);else go();}catch(e){}})()"
            ) % (json.dumps(WMS_HOST), json.dumps(VERSAO), json.dumps(PAINEL_JS))
 
-# Roda dentro da aba do Cubiscan: acha o token da página e pede o backlog (mesma chamada que a página faz).
+# Roda DENTRO do app do Cubiscan (iframe do Google): usa a mesma função que o botão "Backlog" do site usa.
+CUBISCAN_IFRAME_JS = r"""(async function(whs){
+  function acha(w, n) {
+    try { if (w.google && w.google.script && w.google.script.run) return w; } catch (e) {}
+    if (n > 3) return null;
+    for (var i = 0; i < w.frames.length; i++) { try { var r = acha(w.frames[i], n + 1); if (r) return r; } catch (e) {} }
+    return null;
+  }
+  var w = acha(window, 0);
+  if (!w) return JSON.stringify({pronto:false, info:'app do Cubiscan ainda carregando'});
+  function chama(nb) {
+    return new Promise(function(ok, erro) {
+      w.google.script.run.withSuccessHandler(ok).withFailureHandler(function(e){ erro(new Error(String((e && e.message) || e))); })
+        .getCubbingItemsClient({nb: nb, whs: whs});
+    });
+  }
+  if (!window.__criadoOk) { try { await chama('created'); } catch (e) {} window.__criadoOk = 1; }
+  var b = await chama('backlog'), d = typeof b === 'string' ? JSON.parse(b) : b;
+  if (d && d.rows && d.rows.length) return JSON.stringify({ok:true, rows:d.rows, lastUpdate:d.lastUpdate || ''});
+  return JSON.stringify({falhou:true, info:'Cubiscan respondeu sem linhas: ' + JSON.stringify(Object.keys(d || {})).slice(0, 150)});
+})(__WHS__)"""
+
+# Plano B: roda na página do Cubiscan: acha o token da página e pede o backlog (mesma chamada que a página faz).
 CUBISCAN_JS = r"""(async function(whs){
   if (document.readyState !== 'complete') return JSON.stringify({pronto:false});
   if (location.hostname !== __HOST__) {
@@ -275,6 +297,7 @@ class App:
         self.nav = nav
         self.sessoes = {}      # targetId -> sessionId
         self.ajudantes = set() # abas abertas pelo app (Cubiscan)
+        self.iframes = {}      # sessão da aba -> [(sessão do iframe, url)]
 
     def iniciar(self):
         self.nav.cmd("Target.setDiscoverTargets", {"discover": True})
@@ -307,6 +330,10 @@ class App:
                 self.anexar(p.get("targetInfo", {}))
             elif met == "Target.targetDestroyed":
                 self.sessoes.pop(p.get("targetId"), None)
+            elif met == "Target.attachedToTarget" and m.get("sessionId"):
+                info = p.get("targetInfo", {})   # iframe de outro site dentro de uma aba nossa (ex.: app do Cubiscan)
+                if info.get("type") == "iframe":
+                    self.iframes.setdefault(m["sessionId"], []).append((p.get("sessionId"), info.get("url", "")))
             elif met == "Runtime.executionContextCreated":
                 ctx = p.get("context", {})
                 if (ctx.get("auxData") or {}).get("isDefault") and m.get("sessionId"):
@@ -350,10 +377,31 @@ class App:
         manter_aberta = False
         try:
             s = self.nav.cmd("Target.attachToTarget", {"targetId": tid, "flatten": True})["sessionId"]
+            # Não deixa o Chrome "congelar" a aba de fundo e acompanha os iframes do app do Cubiscan
+            for metodo, params in (("Page.enable", {}), ("Page.setWebLifecycleState", {"state": "active"}),
+                                   ("Emulation.setFocusEmulationEnabled", {"enabled": True}),
+                                   ("Target.setAutoAttach", {"autoAttach": True, "waitForDebuggerOnStart": False, "flatten": True})):
+                try:
+                    self.nav.cmd(metodo, params, s)
+                except Exception as e:
+                    log(f"Cubiscan: {metodo} indisponível ({e})")
             codigo = CUBISCAN_JS.replace('__WHS__', json.dumps(whs)).replace('__HOST__', json.dumps(urllib.parse.urlparse(CUB_URL).hostname))
+            cod_iframe = CUBISCAN_IFRAME_JS.replace('__WHS__', json.dumps(whs))
             fim, logins, ultimo = time.time() + 120, 0, "página ainda carregando"
             while time.time() < fim:
                 time.sleep(1.5)
+                # 1º jeito: a mesma função que o botão "Backlog" do site chama, dentro do app do Cubiscan
+                for sess_if, url_if in list(self.iframes.get(s, [])):
+                    try:
+                        r = json.loads(self.nav.js(sess_if, cod_iframe, timeout=90) or "{}")
+                    except Exception:
+                        continue
+                    if r.get("ok"):
+                        log(f"Cubiscan: {len(r['rows'])} linhas recebidas (pelo app do Cubiscan).")
+                        return {"rows": r["rows"], "lastUpdate": r.get("lastUpdate", "")}
+                    if r.get("info"):
+                        ultimo = r["info"]
+                # 2º jeito (plano B): chamada direta com o token da página
                 try:
                     r = json.loads(self.nav.js(s, codigo, timeout=60) or "{}")
                 except Exception as e:
@@ -379,6 +427,10 @@ class App:
                 except Exception:
                     pass
             self.ajudantes.discard(tid)
+            try:
+                self.iframes.pop(s, None)
+            except NameError:
+                pass
 
 
 def principal():
