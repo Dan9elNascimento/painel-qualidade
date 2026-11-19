@@ -2,7 +2,7 @@
    Tudo roda no navegador de quem clicou, com o login dessa pessoa. Nenhum dado sai do PC. */
 (function () {
   'use strict';
-  var VERSAO = '1.5.0';
+  var VERSAO = '1.5.1';
   var ID = 'painel-qualidade-raiz';
   var ZONAS_PADRAO = ['AV', 'D', 'DEM', 'EXZO', 'MI', 'MO', 'OS', 'RO', 'TS', 'RTS'];
 
@@ -330,27 +330,36 @@
   }
   async function buscarBacklogCubiscan(whs, aviso) {
     var base = location.pathname.replace(/\/(exec|dev)$/, '/callback');
-    var corpo = 'request=' + encodeURIComponent(JSON.stringify(['getCubbingItemsClient', JSON.stringify([{ nb: 'backlog', whs: whs }]), null, [0], null, null, 1, 0]));
+    async function rpc(tok, nb) {   // mesma chamada que a página faz (google.script.run -> getCubbingItemsClient)
+      var corpo = 'request=' + encodeURIComponent(JSON.stringify(['getCubbingItemsClient', JSON.stringify([{ nb: nb, whs: whs }]), null, [0], null, null, 1, 0]));
+      var r = await fetch(base + '?nocache_id=' + (Date.now() % 100000) + '&token=' + encodeURIComponent(tok), {
+        method: 'POST', credentials: 'include', body: corpo,
+        headers: { 'content-type': 'application/x-www-form-urlencoded;charset=UTF-8', 'x-same-domain': '1' }
+      });
+      if (!r.ok) return null;
+      var t = await r.text(); t = t.slice(t.indexOf('\n') + 1);
+      var j = JSON.parse(t), bruto = j && j[0] && j[0][1] && j[0][1][1];
+      return typeof bruto === 'string' ? JSON.parse(bruto) : null;
+    }
     var cands = tokensCandidatos();
     if (window.__cubToken) cands.unshift(window.__cubToken);
     aviso('Puxando o backlog do Cubiscan…', 15);
     for (var i = 0; i < cands.length; i++) {
       try {
-        var r = await fetch(base + '?nocache_id=' + (Date.now() % 100000) + '&token=' + encodeURIComponent(cands[i]), {
-          method: 'POST', credentials: 'include', body: corpo,
-          headers: { 'content-type': 'application/x-www-form-urlencoded;charset=UTF-8', 'x-same-domain': '1' }
-        });
-        if (!r.ok) continue;
-        var t = await r.text(); t = t.slice(t.indexOf('\n') + 1);
-        var j = JSON.parse(t), bruto = j && j[0] && j[0][1] && j[0][1][1];
-        if (typeof bruto !== 'string') continue;
-        var d = JSON.parse(bruto);
-        if (!d || !d.rows) continue;
+        // 1º os "Itens novos" (como o site faz ao abrir), depois o Backlog — o servidor prepara os dados nessa ordem
+        var c = await rpc(cands[i], 'created');
+        if (!c) continue;
         window.__cubToken = cands[i];
-        return { linhas: d.rows.map(function (row) { return CUB_MAPA.map(function (k) { var v = row[k]; return v == null ? '' : String(v); }); }), atualizado: d.lastUpdate || '' };
+        for (var t = 0; t < 4; t++) {
+          var d = await rpc(cands[i], 'backlog');
+          if (d && d.rows && d.rows.length) return { linhas: d.rows.map(function (row) { return CUB_MAPA.map(function (k) { var v = row[k]; return v == null ? '' : String(v); }); }), atualizado: d.lastUpdate || '' };
+          aviso('Esperando o Cubiscan preparar o backlog…', 20 + t * 5);
+          await esperar(2500);
+        }
+        break;
       } catch (e) { }
     }
-    throw new Error('Não consegui puxar do Cubiscan nesta página. Atualize a página (F5), espere carregar e tente de novo. Se continuar, use "Baixar CSV" e arraste o arquivo aqui.');
+    throw new Error('Não consegui puxar do Cubiscan pelo favorito. Clique em "Backlog" no Cubiscan e tente de novo — ou use "Baixar CSV" e arraste o arquivo aqui. (Pelo app Painel Qualidade isso é automático.)');
   }
   function areaDe(rua) {   // BRFPE1-A2-04 -> A2 | BRFPE1-HS29-01 -> HS | BRFPE1-HV-03 -> HV
     var seg = String(rua).split('-')[1] || '', m = seg.match(/^([A-Z]{2,})\d+$/);
