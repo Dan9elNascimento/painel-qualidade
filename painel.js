@@ -2,7 +2,7 @@
    Tudo roda no navegador de quem clicou, com o login dessa pessoa. Nenhum dado sai do PC. */
 (function () {
   'use strict';
-  var VERSAO = '1.6.2';
+  var VERSAO = '1.6.4';
   var ID = 'painel-qualidade-raiz';
   var ZONAS_PADRAO = ['AV', 'D', 'DEM', 'EXZO', 'MI', 'MO', 'OS', 'RO', 'TS', 'RTS'];
 
@@ -725,11 +725,26 @@
   function visivel(el) { return !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length)); }
   function textoDe(el) { return (el.textContent || '').replace(/\s+/g, ' ').trim(); }
   function clicar(el) { ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(function (t) { el.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window })); }); }
+  function cliqueFora() {   // "1 clique do lado de fora" — num canto vazio da página
+    var alvo = document.elementFromPoint(5, window.innerHeight - 5) || document.body;
+    if (alvo.closest && alvo.closest('#' + ID)) alvo = document.body;
+    clicar(alvo);
+  }
   function definirValor(inp, v) {
-    var set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-    inp.focus(); set.call(inp, v);
-    inp.dispatchEvent(new Event('input', { bubbles: true })); inp.dispatchEvent(new Event('change', { bubbles: true }));
-    inp.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: '1' })); inp.blur(); inp.dispatchEvent(new Event('blur', { bubbles: true }));
+    // Digita como uma pessoa: seleciona tudo, digita o valor e clica fora
+    inp.focus(); clicar(inp);
+    try { inp.select(); } catch (e) {}
+    var digitou = false;
+    try { digitou = document.execCommand('insertText', false, v); } catch (e) {}
+    if (!digitou || inp.value !== v) {
+      var set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      set.call(inp, v);
+      inp.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: v }));
+      inp.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    inp.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: v }));
+    inp.blur(); inp.dispatchEvent(new FocusEvent('blur')); inp.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+    cliqueFora();
   }
   function seletorPagina() {
     var cands = [].filter.call(document.querySelectorAll('span,div,input'), function (el) {
@@ -738,26 +753,53 @@
     });
     return cands[cands.length - 1] || null;
   }
+  function eh200(el) { return !!el && /^\s*200\s*\//.test(textoDe(el) || el.value || ''); }
+  function opcoes200(atual) {
+    return [].filter.call(document.querySelectorAll('li,div,span,[role=option]'), function (el) {
+      return visivel(el) && !el.closest('#' + ID) && el !== atual && !el.contains(atual) && el.querySelectorAll('*').length <= 3 && /^\s*200\s*\/\s*\w+\s*$/i.test(textoDe(el));
+    });
+  }
+  function tecla(el, k, code) {
+    ['keydown', 'keyup'].forEach(function (t) { el.dispatchEvent(new KeyboardEvent(t, { bubbles: true, cancelable: true, key: k, code: k, keyCode: code, which: code })); });
+  }
   async function porPagina200() {
-    for (var tentativa = 0; tentativa < 3; tentativa++) {
-      var atual = seletorPagina();
-      if (!atual) return 'sem seletor';
-      if (/^\s*200\s*\//.test(textoDe(atual) || atual.value || '')) return 'ok';
-      // abre o seletor: sobe até a "caixa" do select (antd/ssc abrem no mousedown da caixa)
-      var caixa = atual, k = 0;
-      while (caixa.parentElement && k++ < 4 && !/(select|selector)(?![-_]?(item|selection-item|placeholder))/i.test(caixa.className || '')) caixa = caixa.parentElement;
-      [atual, caixa].forEach(clicar);
-      for (var t = 0; t < 15; t++) {
-        await esperar(200);
-        var op = [].filter.call(document.querySelectorAll('li,div,span'), function (el) {
-          return visivel(el) && !el.closest('#' + ID) && el !== atual && !el.contains(atual) && el.querySelectorAll('*').length <= 2 && /^\s*200\s*\/\s*\w+\s*$/i.test(textoDe(el));
-        }).pop();
-        if (op) { clicar(op); var item = op.closest('[class*=option],[role=option],li'); if (item && item !== op) clicar(item); break; }
-      }
-      await esperar(1500);
+    var atual = seletorPagina();
+    if (!atual) return 'sem seletor';
+    if (eh200(atual)) return 'ok';
+    var caixa = atual, k = 0;
+    while (caixa.parentElement && k++ < 4 && !/(select|selector)(?![-_]?(item|selection-item|placeholder))/i.test(caixa.className || '')) caixa = caixa.parentElement;
+    async function abrir() {
+      if (opcoes200(atual).length) return true;
+      clicar(caixa);
+      for (var t = 0; t < 10; t++) { await esperar(150); if (opcoes200(atual).length) return true; }
+      clicar(atual);
+      for (t = 0; t < 10; t++) { await esperar(150); if (opcoes200(atual).length) return true; }
+      return false;
     }
+    async function conferir() { await esperar(1200); var a = seletorPagina(); return eh200(a); }
+    // 1) clique na opção (no texto e no item inteiro)
+    if (await abrir()) {
+      var ops = opcoes200(atual), op = ops[ops.length - 1];
+      var item = op.closest('[class*=option],[role=option],li') || op;
+      log('Rack Transfer: opção 200 achada (' + item.tagName.toLowerCase() + '.' + String(item.className || '').split(' ')[0] + ')');
+      ['mouseenter', 'mouseover', 'mousemove'].forEach(function (t) { item.dispatchEvent(new MouseEvent(t, { bubbles: true, view: window })); });
+      clicar(item); if (await conferir()) return 'ok';
+      if (await abrir()) { ops = opcoes200(atual); op = ops[ops.length - 1]; clicar(op); if (await conferir()) return 'ok'; }
+    } else log('⚠️ Não consegui abrir a lista de por página.', 'er');
+    // 2) teclado: abre e desce com a seta até o 200, depois Enter
+    atual = seletorPagina() || atual;
+    var foco = caixa.querySelector('input') || caixa;
+    try { foco.focus(); } catch (e) {}
+    await abrir();
+    for (var n = 0; n < 6; n++) {
+      tecla(document.activeElement || foco, 'ArrowDown', 40); await esperar(150);
+      var ativo = [].filter.call(document.querySelectorAll('[class*=active],[class*=hover],[aria-selected=true],[class*=focus]'), function (el) { return visivel(el) && /^\s*200\s*\//.test(textoDe(el)) && el.querySelectorAll('*').length <= 3; })[0];
+      if (ativo) break;
+    }
+    tecla(document.activeElement || foco, 'Enter', 13);
+    if (await conferir()) return 'ok';
     var fim = seletorPagina();
-    return fim && /^\s*200\s*\//.test(textoDe(fim) || fim.value || '') ? 'ok' : 'falhou';
+    return eh200(fim) ? 'ok' : 'falhou';
   }
   function botaoProxima() {
     var b = [].filter.call(document.querySelectorAll('[class*=pagination] [class*=next], [class*=pager] [class*=next], button[aria-label*=next i], li[title*=Next], [class*=next-page]'), function (el) { return visivel(el) && !el.closest('#' + ID); })[0];
@@ -766,11 +808,23 @@
     return desab ? null : (b.querySelector('button,a') || b);
   }
   function inputsPutaway() {
-    var th = [].filter.call(document.querySelectorAll('th'), function (el) { return /suggested\s*putaway\s*qty|putaway\s*sugerid/i.test(textoDe(el)); })[0];
+    var th = [].filter.call(document.querySelectorAll('th,[class*=header-cell],[class*=table-cell]'), function (el) {
+      return visivel(el) && !el.closest('#' + ID) && /suggested\s*putaway\s*qty|putaway\s*sugerid/i.test(textoDe(el)) && textoDe(el).length < 40;
+    }).pop();
     if (!th) return null;
-    var col = th.cellIndex, base = th.closest('[class*=table-wrapper],[class*=table-container],[class*=-table]:not(table)') || th.closest('table').parentElement;
-    for (var k = 0; k < 4 && base && !base.querySelector('tbody tr td'); k++) base = base.parentElement;
-    var res = [];
+    var c = th.getBoundingClientRect(), res = [], vistos = new Set();
+    [].forEach.call(document.querySelectorAll('input'), function (inp) {
+      if (inp.disabled || inp.readOnly || !visivel(inp) || inp.closest('#' + ID) || inp.type === 'checkbox' || inp.type === 'radio') return;
+      var r = inp.getBoundingClientRect(), meio = (r.left + r.right) / 2;
+      if (meio < c.left - 5 || meio > c.right + 5 || r.top < c.bottom - 5) return;
+      var tr = inp.closest('tr') || inp.parentElement;
+      if (vistos.has(tr)) return; vistos.add(tr);
+      res.push({ tr: tr, inp: inp });
+    });
+    if (res.length) return res;
+    // Plano B: pela posição da coluna no cabeçalho (quando cabeçalho e corpo são a mesma tabela)
+    var col = th.cellIndex, tabela = th.closest('table'), base = tabela ? tabela.parentElement : document;
+    for (var k = 0; k < 5 && base && !base.querySelector('tbody tr td input'); k++) base = base.parentElement;
     [].forEach.call((base || document).querySelectorAll('tbody tr'), function (tr) {
       var td = tr.cells[col], inp = td && td.querySelector('input:not([disabled]):not([readonly])');
       if (inp && visivel(inp)) res.push({ tr: tr, inp: inp });
@@ -802,9 +856,15 @@
       function chave(tr) { return textoDe(tr.cells[0] || tr).slice(0, 60); }
       for (var pagina = 1; pagina <= 40; pagina++) {
         // Repete até a página ficar estável: tudo com 1 e sem aviso (removendo quem continua com aviso)
+        var ultimaFalta = -1, semMudar = 0;
         for (var rodada = 0; rodada < 300; rodada++) {
-          var its = inputsPutaway() || [], mudou = false;
+          var its = inputsPutaway() || [], mudou = false, faltam = 0;
+          if (rodada === 0) log('Página ' + pagina + ': achei ' + its.length + ' campos de Suggested Putaway Qty.');
           its.forEach(function (x) { vistos[chave(x.tr)] = 1; if (x.inp.value !== '1') { definirValor(x.inp, '1'); mudou = true; } });
+          its.forEach(function (x) { if (x.inp.value !== '1') faltam++; });
+          if (mudou && faltam && faltam === ultimaFalta) { semMudar++; } else semMudar = 0;
+          ultimaFalta = faltam;
+          if (semMudar >= 3) { log('⚠️ O WMS não aceitou o valor 1 em ' + faltam + ' campo(s). Me mande um print.', 'er'); break; }
           rAviso('Página ' + pagina + ': ' + Object.keys(vistos).length + ' SKUs com 1 unidade…', Math.min(70, 20 + Object.keys(vistos).length / 3));
           if (mudou) { await esperar(800); continue; }
           // Com aviso mesmo já estando com 1 → remove
