@@ -2,7 +2,7 @@
    Tudo roda no navegador de quem clicou, com o login dessa pessoa. Nenhum dado sai do PC. */
 (function () {
   'use strict';
-  var VERSAO = '1.5.1';
+  var VERSAO = '1.5.2';
   var ID = 'painel-qualidade-raiz';
   var ZONAS_PADRAO = ['AV', 'D', 'DEM', 'EXZO', 'MI', 'MO', 'OS', 'RO', 'TS', 'RTS'];
 
@@ -440,6 +440,11 @@
     var procv = linhas.map(function (l, n) {
       var loc = String(l[iPos] || '').trim();
       return [l[iSku], loc, loc ? ruaDe(loc) : '', loteDaLinha[n] || 'Sem posição'];
+    });
+    // Ordem: lote, depois rua, depois location (assim o detalhe dos 2 cliques já sai em ordem de rua)
+    procv.sort(function (a, b) {
+      if (a[3] !== b[3]) return a[3] < b[3] ? -1 : 1;
+      return ordemNatural(a[2], b[2]) || ordemNatural(a[1], b[1]);
     });
     // Tabela dinâmica de verdade: linhas = Lote > rua, valores = COUNTA de SKU.
     // 2 cliques no total do lote abre TODOS os SKUs do lote (todas as ruas juntas); na rua, só a rua.
