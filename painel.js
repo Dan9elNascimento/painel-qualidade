@@ -2,7 +2,7 @@
    Tudo roda no navegador de quem clicou, com o login dessa pessoa. Nenhum dado sai do PC. */
 (function () {
   'use strict';
-  var VERSAO = '1.6.4';
+  var VERSAO = '1.6.5';
   var ID = 'painel-qualidade-raiz';
   var ZONAS_PADRAO = ['AV', 'D', 'DEM', 'EXZO', 'MI', 'MO', 'OS', 'RO', 'TS', 'RTS'];
 
@@ -505,7 +505,7 @@
   var raiz = host.attachShadow({ mode: 'open' });
   raiz.innerHTML = '<style>' +
     ':host{all:initial}*{box-sizing:border-box;margin:0;font-family:"Segoe UI",Roboto,Arial,sans-serif}' +
-    '.app{position:fixed;inset:0;display:flex;flex-direction:column;background:#f4f5f7;color:#1f2328;font-size:14px;overflow:hidden}' +'.app.janela{inset:auto;border-radius:12px;box-shadow:0 18px 60px rgba(0,0,0,.35);border:1px solid #2d333b}.app.oculto{display:none}' +'.barra-t{height:38px;flex:0 0 38px;background:#15181c;color:#e6e8eb;display:flex;align-items:center;gap:8px;padding:0 6px 0 14px;user-select:none;cursor:default}.app.janela .barra-t{cursor:move}' +'.barra-t b{font-size:13px;flex:1;font-weight:600}.barra-t b small{color:#8b929b;font-weight:400;margin-left:6px}' +'.wb{width:34px;height:28px;border:0;border-radius:7px;background:none;color:#cfd3da;cursor:pointer;font-size:15px;display:grid;place-items:center}.wb:hover{background:#2d333b;color:#fff}.wb.x:hover{background:#e5484d}' +'.corpo{flex:1;display:flex;min-height:0}' +'.alca{position:absolute;right:0;bottom:0;width:18px;height:18px;cursor:nwse-resize;display:none;background:linear-gradient(135deg,transparent 50%,#9aa1aa 50%,#9aa1aa 58%,transparent 58%,transparent 70%,#9aa1aa 70%,#9aa1aa 78%,transparent 78%)}.app.janela .alca{display:block}' +'.pilula{position:fixed;right:18px;bottom:18px;display:none;align-items:center;gap:10px;background:#1f2328;color:#fff;border:0;border-left:5px solid #EE4D2D;border-radius:12px;padding:11px 16px;font:600 13px Segoe UI,Arial,sans-serif;cursor:pointer;box-shadow:0 8px 28px rgba(0,0,0,.35);max-width:360px}.pilula.on{display:flex}.pilula:hover{background:#2d333b}.pilula small{font-weight:400;color:#cfd3da}' +
+    '.app{position:fixed;inset:0;display:flex;flex-direction:column;background:#f4f5f7;color:#1f2328;font-size:14px;overflow:hidden}' +'.app.janela{inset:auto;border-radius:12px;box-shadow:0 18px 60px rgba(0,0,0,.35);border:1px solid #2d333b}.app.oculto{display:none}' +'.barra-t{height:38px;flex:0 0 38px;background:#15181c;color:#e6e8eb;display:flex;align-items:center;gap:8px;padding:0 6px 0 14px;user-select:none;cursor:default}.app.janela .barra-t{cursor:move}' +'.barra-t b{font-size:13px;flex:1;font-weight:600}.barra-t b small{color:#8b929b;font-weight:400;margin-left:6px}' +'.wb{width:34px;height:28px;border:0;border-radius:7px;background:none;color:#cfd3da;cursor:pointer;font-size:15px;display:grid;place-items:center}.wb:hover{background:#2d333b;color:#fff}.wb.x:hover{background:#e5484d}' +'.corpo{flex:1;display:flex;min-height:0}' +'.alca{position:absolute;right:0;bottom:0;width:18px;height:18px;cursor:nwse-resize;display:none;background:linear-gradient(135deg,transparent 50%,#9aa1aa 50%,#9aa1aa 58%,transparent 58%,transparent 70%,#9aa1aa 70%,#9aa1aa 78%,transparent 78%)}.app.janela .alca{display:block}' +'.pilula{position:fixed;right:18px;top:45%;user-select:none;display:none;align-items:center;gap:10px;background:#1f2328;color:#fff;border:0;border-left:5px solid #EE4D2D;border-radius:12px;padding:11px 16px;font:600 13px Segoe UI,Arial,sans-serif;cursor:pointer;box-shadow:0 8px 28px rgba(0,0,0,.35);max-width:360px}.pilula.on{display:flex}.pilula:hover{background:#2d333b}.pilula small{font-weight:400;color:#cfd3da}' +
     'aside{width:230px;background:#1f2328;color:#cfd3da;display:flex;flex-direction:column;padding:18px 12px}' +
     '.logo{color:#fff;font-weight:700;font-size:16px;padding:2px 8px 20px;display:flex;gap:10px;align-items:center}.logo span{background:#EE4D2D;border-radius:9px;width:34px;height:34px;display:grid;place-items:center;font-size:18px}.logo small{display:block;font-weight:400;color:#8b929b;font-size:11px}' +
     '.sec{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:#7d8590;padding:12px 10px 6px}' +
@@ -605,7 +605,23 @@
   function guardarJanela() { cfg.janela = jan; cfg.modo = modo; salvarCfg(); }
   function minimizar() { minimizado = true; aplicar(); }
   function restaurar() { minimizado = false; aplicar(); }
-  $('bMin').onclick = minimizar; $('fechar').onclick = minimizar; pil.onclick = restaurar;
+  $('bMin').onclick = minimizar; $('fechar').onclick = minimizar;
+  // Botão minimizado: clique abre o painel; arrastar muda o lugar (fica salvo)
+  if (cfg.pil) { pil.style.left = cfg.pil.x + 'px'; pil.style.top = cfg.pil.y + 'px'; pil.style.right = 'auto'; }
+  var arrastou = false;
+  pil.addEventListener('mousedown', function (e) {
+    if (e.button !== 0) return;
+    var r = pil.getBoundingClientRect(), dx = e.clientX - r.left, dy = e.clientY - r.top, sx = e.clientX, sy = e.clientY; arrastou = false;
+    function mov(ev) {
+      if (!arrastou && Math.abs(ev.clientX - sx) + Math.abs(ev.clientY - sy) < 6) return;
+      arrastou = true;
+      var x = Math.max(0, Math.min(window.innerWidth - r.width, ev.clientX - dx)), y = Math.max(0, Math.min(window.innerHeight - r.height, ev.clientY - dy));
+      pil.style.left = x + 'px'; pil.style.top = y + 'px'; pil.style.right = 'auto'; cfg.pil = { x: x, y: y };
+    }
+    function sol() { document.removeEventListener('mousemove', mov); document.removeEventListener('mouseup', sol); if (arrastou) salvarCfg(); }
+    document.addEventListener('mousemove', mov); document.addEventListener('mouseup', sol); e.preventDefault();
+  });
+  pil.onclick = function () { if (arrastou) { arrastou = false; return; } restaurar(); };
   $('bMax').onclick = function () { modo = modo === 'janela' ? 'max' : 'janela'; aplicar(); guardarJanela(); };
   $('barraT').addEventListener('dblclick', function (e) { if (e.target.tagName !== 'BUTTON') $('bMax').onclick(); });
   $('bFec').onclick = function () {
@@ -725,10 +741,10 @@
   function visivel(el) { return !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length)); }
   function textoDe(el) { return (el.textContent || '').replace(/\s+/g, ' ').trim(); }
   function clicar(el) { ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(function (t) { el.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window })); }); }
-  function cliqueFora() {   // "1 clique do lado de fora" — num canto vazio da página
-    var alvo = document.elementFromPoint(5, window.innerHeight - 5) || document.body;
-    if (alvo.closest && alvo.closest('#' + ID)) alvo = document.body;
-    clicar(alvo);
+  function cliqueFora(inp) {   // "1 clique do lado de fora": na célula do SKU da mesma linha (lugar neutro)
+    var tr = inp && inp.closest('tr'), alvo = tr && tr.cells && tr.cells[0];
+    if (alvo) { var t = alvo.querySelector('div,span') || alvo; ['mousedown', 'mouseup', 'click'].forEach(function (n) { t.dispatchEvent(new MouseEvent(n, { bubbles: true, cancelable: true, view: window })); }); }
+    else document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
   }
   function definirValor(inp, v) {
     // Digita como uma pessoa: seleciona tudo, digita o valor e clica fora
@@ -744,7 +760,7 @@
     }
     inp.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: v }));
     inp.blur(); inp.dispatchEvent(new FocusEvent('blur')); inp.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
-    cliqueFora();
+    cliqueFora(inp);
   }
   function seletorPagina() {
     var cands = [].filter.call(document.querySelectorAll('span,div,input'), function (el) {
@@ -816,7 +832,7 @@
     [].forEach.call(document.querySelectorAll('input'), function (inp) {
       if (inp.disabled || inp.readOnly || !visivel(inp) || inp.closest('#' + ID) || inp.type === 'checkbox' || inp.type === 'radio') return;
       var r = inp.getBoundingClientRect(), meio = (r.left + r.right) / 2;
-      if (meio < c.left - 5 || meio > c.right + 5 || r.top < c.bottom - 5) return;
+      if (meio < c.left - 5 || meio > c.right + 5 || inp.closest('thead')) return;
       var tr = inp.closest('tr') || inp.parentElement;
       if (vistos.has(tr)) return; vistos.add(tr);
       res.push({ tr: tr, inp: inp });
