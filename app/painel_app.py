@@ -19,7 +19,7 @@ import urllib.parse
 import urllib.request
 import base64
 
-VERSAO = "1.1.0"
+VERSAO = "1.2.0"
 PORTA = int(os.environ.get("PAINEL_PORTA", "9333"))
 WMS_URL = os.environ.get("PAINEL_WMS_URL", "https://wms.ssc.shopee.com.br/")
 WMS_HOST = urllib.parse.urlparse(WMS_URL).hostname
@@ -241,23 +241,32 @@ CUBISCAN_JS = r"""(async function(whs){
     /token["']?\s*[:=,]\s*["']([A-Za-z0-9_\-:]{20,90})["']/g, /["'](AM[A-Za-z0-9_\-]{8,}:\d{10,})["']/g, /["'](A[A-Za-z0-9_\-]{30,50})["']/g];
   res.forEach(function(re){ while ((m = re.exec(html))) if (achados.indexOf(m[1]) < 0) achados.push(m[1]); });
   if (!achados.length) return JSON.stringify({pronto:false, info:'página sem token ainda'});
-  var status = [];
-  var base = location.pathname.replace(/\/(exec|dev)$/, '/callback');
-  var corpo = 'request=' + encodeURIComponent(JSON.stringify(['getCubbingItemsClient', JSON.stringify([{nb:'backlog', whs:whs}]), null, [0], null, null, 1, 0]));
-  for (var i = 0; i < Math.min(achados.length, 40); i++) {
+  var status = [], base = location.pathname.replace(/\/(exec|dev)$/, '/callback');
+  // Mesma chamada que a página faz (google.script.run -> getCubbingItemsClient)
+  async function rpc(tok, nb) {
+    var corpo = 'request=' + encodeURIComponent(JSON.stringify(['getCubbingItemsClient', JSON.stringify([{nb:nb, whs:whs}]), null, [0], null, null, 1, 0]));
+    var r = await fetch(base + '?nocache_id=' + (Date.now() % 100000) + '&token=' + encodeURIComponent(tok), {method:'POST', credentials:'include', body:corpo,
+      headers:{'content-type':'application/x-www-form-urlencoded;charset=UTF-8','x-same-domain':'1'}});
+    status.push(nb[0] + r.status);
+    if (!r.ok) return null;
+    var t = await r.text(); t = t.slice(t.indexOf('\n') + 1);
+    var j = JSON.parse(t), bruto = j && j[0] && j[0][1] && j[0][1][1];
+    return typeof bruto === 'string' ? JSON.parse(bruto) : null;
+  }
+  var lista = window.__tokOk ? [window.__tokOk] : achados.slice(0, 40), ultimo = null;
+  for (var i = 0; i < lista.length; i++) {
     try {
-      var r = await fetch(base + '?nocache_id=' + (Date.now() % 100000) + '&token=' + encodeURIComponent(achados[i]), {method:'POST', credentials:'include', body:corpo,
-        headers:{'content-type':'application/x-www-form-urlencoded;charset=UTF-8','x-same-domain':'1'}});
-      status.push(r.status);
-      if (!r.ok) continue;
-      var t = await r.text(); t = t.slice(t.indexOf('\n') + 1);
-      var j = JSON.parse(t), bruto = j && j[0] && j[0][1] && j[0][1][1];
-      if (typeof bruto !== 'string') continue;
-      var d = JSON.parse(bruto);
-      if (d && d.rows) return JSON.stringify({ok:true, rows:d.rows, lastUpdate:d.lastUpdate || ''});
+      // 1º pede os "Itens novos" (como o site faz ao abrir) — o servidor prepara os dados nessa hora
+      if (!window.__criadoOk) { var c = await rpc(lista[i], 'created'); if (!c) continue; window.__criadoOk = 1; window.__tokOk = lista[i]; }
+      var d = await rpc(lista[i], 'backlog');
+      if (!d) continue;
+      window.__tokOk = lista[i]; ultimo = d;
+      if (d.rows && d.rows.length) return JSON.stringify({ok:true, rows:d.rows, lastUpdate:d.lastUpdate || ''});
+      break;
     } catch (e) {}
   }
-  return JSON.stringify({falhou:true, info:'tokens=' + achados.length + ' status=' + status.slice(0, 8).join(',')});
+  var resumo = ultimo ? ' resposta=' + JSON.stringify(Object.keys(ultimo).reduce(function(o, k){ if (k !== 'rows') o[k] = ultimo[k]; return o; }, {})).slice(0, 200) + ' linhas=' + ((ultimo.rows || []).length) : '';
+  return JSON.stringify({falhou:true, info:'tokens=' + achados.length + ' status=' + status.slice(0, 8).join(',') + resumo});
 })(__WHS__)"""
 
 
