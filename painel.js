@@ -2,7 +2,7 @@
    Tudo roda no navegador de quem clicou, com o login dessa pessoa. Nenhum dado sai do PC. */
 (function () {
   'use strict';
-  var VERSAO = '1.1.0';
+  var VERSAO = '1.2.0';
   var ID = 'painel-qualidade-raiz';
   var ZONAS_PADRAO = ['AV', 'D', 'DEM', 'EXZO', 'MI', 'MO', 'OS', 'RO', 'TS', 'RTS'];
 
@@ -19,7 +19,7 @@
 
   /* ===================== CONFIG (por pessoa, neste navegador) ===================== */
   var CHAVE = 'painelQualidade_cfg';
-  var cfg = { zonas: ZONAS_PADRAO.slice(), dup: true };
+  var cfg = { zonas: ZONAS_PADRAO.slice(), dup: true, cubMin: 150, cubMax: 230 };
   try { var salvo = JSON.parse(localStorage.getItem(CHAVE) || 'null'); if (salvo) for (var k in salvo) cfg[k] = salvo[k]; } catch (e) {}
   function salvarCfg() { try { localStorage.setItem(CHAVE, JSON.stringify(cfg)); } catch (e) {} }
 
@@ -175,7 +175,9 @@
   function escX(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, ''); }
   function letra(n) { var s = ''; n++; while (n > 0) { var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
   var NUM = /^-?(0|[1-9]\d{0,11})(\.\d+)?$/;
-  function abaXML(cab, linhas) {
+  var CORES_LOTE = ['C6EFCE', 'BDD7EE', 'FFEB9C', 'F8CBAD', 'D9C3E9', 'B4E5E1']; // estilos 2..7
+  function abaXML(cab, linhas, op) {
+    op = op || {};
     var larg = cab.map(function (h) { return Math.max(8, Math.min(45, String(h).length + 2)); });
     linhas.slice(0, 300).forEach(function (l) { l.forEach(function (v, j) { if (j < larg.length) larg[j] = Math.max(larg[j], Math.min(45, String(v).length + 2)); }); });
     var L = cab.map(function (_, j) { return letra(j); });
@@ -184,17 +186,19 @@
     partes.push('<row r="1">' + cab.map(function (h, j) { return '<c r="' + L[j] + '1" t="inlineStr" s="1"><is><t>' + escX(h) + '</t></is></c>'; }).join('') + '</row>');
     var buf = [];
     for (var i = 0; i < linhas.length; i++) {
-      var l = linhas[i], r = i + 2, s = '<row r="' + r + '">';
-      for (var j = 0; j < l.length; j++) {
+      var l = linhas[i], r = i + 2, s = '<row r="' + r + '">', st = op.estilo ? op.estilo(i) : 0, sa = st ? ' s="' + st + '"' : '';
+      for (var j = 0; j < (st ? cab.length : l.length); j++) {
         var v = l[j] == null ? '' : String(l[j]).trim();
-        if (v === '') continue;
-        s += NUM.test(v) ? '<c r="' + L[j] + r + '"><v>' + v + '</v></c>' : '<c r="' + L[j] + r + '" t="inlineStr"><is><t xml:space="preserve">' + escX(v) + '</t></is></c>';
+        if (v === '') { if (st) s += '<c r="' + L[j] + r + '"' + sa + '/>'; continue; }
+        var sj = op.estiloCel ? (op.estiloCel(i, j) || sa) : sa; if (typeof sj === 'number') sj = ' s="' + sj + '"';
+        s += NUM.test(v) ? '<c r="' + L[j] + r + '"' + sj + '><v>' + v + '</v></c>' : '<c r="' + L[j] + r + '"' + sj + ' t="inlineStr"><is><t xml:space="preserve">' + escX(v) + '</t></is></c>';
       }
       buf.push(s + '</row>');
       if (buf.length === 5000) { partes.push(buf.join('')); buf = []; }
     }
     partes.push(buf.join(''));
-    partes.push('</sheetData><autoFilter ref="A1:' + L[cab.length - 1] + (linhas.length + 1) + '"/></worksheet>');
+    partes.push('</sheetData>' + (op.semFiltro ? '' : '<autoFilter ref="A1:' + L[cab.length - 1] + (linhas.length + 1) + '"/>') +
+      (op.links && op.links.length ? '<hyperlinks>' + op.links.map(function (k) { return '<hyperlink ref="' + k.ref + '" location="' + escX(k.alvo).replace(/"/g, '&quot;') + '" display="' + escX(k.texto || '') + '"/>'; }).join('') + '</hyperlinks>' : '') + '</worksheet>');
     return new Blob(partes);
   }
   async function gerarXLSX(abas) {
@@ -204,11 +208,19 @@
       ['_rels/.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'],
       ['xl/workbook.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>' + abas.map(function (a, i) { return '<sheet name="' + escX(a.nome).slice(0, 31) + '" sheetId="' + (i + 1) + '" r:id="rId' + (i + 1) + '"/>'; }).join('') + '</sheets></workbook>'],
       ['xl/_rels/workbook.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' + abas.map(function (_, i) { return '<Relationship Id="rId' + (i + 1) + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet' + (i + 1) + '.xml"/>'; }).join('') + '<Relationship Id="rId' + (abas.length + 1) + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'],
-      ['xl/styles.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFEE4D2D"/></patternFill></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="2"><xf xfId="0"/><xf xfId="0" fontId="1" fillId="2" applyFont="1" applyFill="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>']
+      ['xl/styles.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+        '<fonts count="4"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font><font><u/><sz val="11"/><color rgb="FF1155CC"/><name val="Calibri"/></font></fonts>' +
+        '<fills count="10"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFEE4D2D"/></patternFill></fill>' +
+        CORES_LOTE.map(function (c) { return '<fill><patternFill patternType="solid"><fgColor rgb="FF' + c + '"/></patternFill></fill>'; }).join('') +
+        '<fill><patternFill patternType="solid"><fgColor rgb="FFE5E7EB"/></patternFill></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf/></cellStyleXfs>' +
+        '<cellXfs count="12"><xf xfId="0"/><xf xfId="0" fontId="1" fillId="2" applyFont="1" applyFill="1"/>' +
+        CORES_LOTE.map(function (_, i) { return '<xf xfId="0" fillId="' + (3 + i) + '" applyFill="1"/>'; }).join('') +
+        '<xf xfId="0" fontId="2" applyFont="1"/><xf xfId="0" fontId="2" fillId="9" applyFont="1" applyFill="1"/><xf xfId="0" fontId="3" applyFont="1"/><xf xfId="0" fontId="2" fillId="2" applyFont="1" applyFill="1"/></cellXfs>' +
+        '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>']
     ];
     var entradas = [];
     for (var i = 0; i < fixos.length; i++) entradas.push(await prepararEntrada(fixos[i][0], new Blob([fixos[i][1]])));
-    for (var a = 0; a < abas.length; a++) entradas.push(await prepararEntrada('xl/worksheets/sheet' + (a + 1) + '.xml', abaXML(abas[a].cab, abas[a].linhas)));
+    for (var a = 0; a < abas.length; a++) entradas.push(await prepararEntrada('xl/worksheets/sheet' + (a + 1) + '.xml', abaXML(abas[a].cab, abas[a].linhas, abas[a].op)));
     return montarZip(entradas, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   }
 
@@ -272,6 +284,118 @@
     return { blob: blob, nome: 'OnHand_unificado_' + carimbo() + '.xlsx', lidas: lidas, dup: u.dup, porZona: f.porZona, final: f.linhas.length, arquivos: arqs.length, coluna: f.coluna };
   }
 
+
+  /* ===================== CUBISCAN: backlog -> lotes de ruas ===================== */
+  var CUB_URL = 'https://script.google.com/a/shopee.com/macros/s/AKfycbzfv3G8biAdsTp5DMWptXOwDgrMFwCCbAb50LQ72Hogbvj0A1wXpQB1uzYbN5M1gTEk/exec?page=cubscan';
+  var CUB_CAB = ['Task ID', 'SKU', 'Caixa (ASN)', 'WH responsavel', 'WH fisico', 'Estoque', 'Posicao 1', 'Posicao 2', 'Operador', 'Turno', 'Tipo', 'Status', 'Criado em', 'Aging (dias)', 'Sem dimensao'];
+  var CUB_MAPA = [1, 2, 3, 0, 10, 14, 15, 16, 11, 13, 5, 4, 17, 7, 8]; // posição de cada coluna na resposta do Cubiscan
+  function naPaginaCubiscan() { return !!window.__CUB_FORCE__ || location.hostname === 'script.google.com' && /AKfycbzfv3G8biAdsTp5DMWptXOwDgrMFwCCbAb50LQ72Hogbvj0A1wXpQB1uzYbN5M1gTEk/.test(location.pathname); }
+  function tokensCandidatos() {
+    var html = document.documentElement.innerHTML, achados = [], m, res = [
+      /token["']?\s*[:=,]\s*["']([A-Za-z0-9_\-:]{20,90})["']/g,
+      /["'](AM[A-Za-z0-9_\-]{8,}:\d{10,})["']/g,
+      /["'](A[A-Za-z0-9_\-]{30,50})["']/g];
+    res.forEach(function (re) { while ((m = re.exec(html))) if (achados.indexOf(m[1]) < 0) achados.push(m[1]); });
+    return achados.slice(0, 40);
+  }
+  async function buscarBacklogCubiscan(whs, aviso) {
+    var base = location.pathname.replace(/\/(exec|dev)$/, '/callback');
+    var corpo = 'request=' + encodeURIComponent(JSON.stringify(['getCubbingItemsClient', JSON.stringify([{ nb: 'backlog', whs: whs }]), null, [0], null, null, 1, 0]));
+    var cands = tokensCandidatos();
+    if (window.__cubToken) cands.unshift(window.__cubToken);
+    aviso('Puxando o backlog do Cubiscan…', 15);
+    for (var i = 0; i < cands.length; i++) {
+      try {
+        var r = await fetch(base + '?nocache_id=' + (Date.now() % 100000) + '&token=' + encodeURIComponent(cands[i]), {
+          method: 'POST', credentials: 'include', body: corpo,
+          headers: { 'content-type': 'application/x-www-form-urlencoded;charset=UTF-8', 'x-same-domain': '1' }
+        });
+        if (!r.ok) continue;
+        var t = await r.text(); t = t.slice(t.indexOf('\n') + 1);
+        var j = JSON.parse(t), bruto = j && j[0] && j[0][1] && j[0][1][1];
+        if (typeof bruto !== 'string') continue;
+        var d = JSON.parse(bruto);
+        if (!d || !d.rows) continue;
+        window.__cubToken = cands[i];
+        return { linhas: d.rows.map(function (row) { return CUB_MAPA.map(function (k) { var v = row[k]; return v == null ? '' : String(v); }); }), atualizado: d.lastUpdate || '' };
+      } catch (e) { }
+    }
+    throw new Error('Não consegui puxar do Cubiscan nesta página. Atualize a página (F5), espere carregar e tente de novo. Se continuar, use "Baixar CSV" e arraste o arquivo aqui.');
+  }
+  function ruaDe(loc) { var p = String(loc || '').trim().toUpperCase().split('-'); return p.length >= 3 ? p.slice(0, 3).join('-') : String(loc || '').trim().toUpperCase(); }
+  function ordemNatural(a, b) {
+    var x = a.split(/(\d+)/), y = b.split(/(\d+)/);
+    for (var i = 0; i < Math.min(x.length, y.length); i++) {
+      if (x[i] === y[i]) continue;
+      var nx = /^\d+$/.test(x[i]), ny = /^\d+$/.test(y[i]);
+      if (nx && ny) return +x[i] - +y[i];
+      return x[i] < y[i] ? -1 : 1;
+    }
+    return x.length - y.length;
+  }
+  function montarLotes(ruas, min, max) {
+    // ruas: [{rua, itens:[...]}] já em ordem. Junta ruas vizinhas até ficar entre min e max SKUs.
+    var pedacos = [];
+    ruas.forEach(function (r) {
+      if (r.itens.length <= max) return pedacos.push(r);
+      var n = Math.ceil(r.itens.length / max), tam = Math.ceil(r.itens.length / n);   // rua grande demais: divide
+      for (var k = 0; k < n; k++) pedacos.push({ rua: r.rua, parte: (k + 1) + '/' + n, itens: r.itens.slice(k * tam, (k + 1) * tam) });
+    });
+    var lotes = [], atual = null;
+    function total(l) { return l.pedacos.reduce(function (s, p) { return s + p.itens.length; }, 0); }
+    pedacos.forEach(function (p) {
+      if (atual && total(atual) + p.itens.length > max) { lotes.push(atual); atual = null; }
+      if (!atual) atual = { pedacos: [] };
+      atual.pedacos.push(p);
+      if (total(atual) >= min && total(atual) >= max - 5) { lotes.push(atual); atual = null; }
+    });
+    if (atual) {
+      var ult = lotes[lotes.length - 1];
+      if (total(atual) < min && ult && total(ult) + total(atual) <= max) ult.pedacos = ult.pedacos.concat(atual.pedacos); else lotes.push(atual);
+    }
+    lotes.forEach(function (l, i) { l.n = i + 1; l.total = total(l); l.ok = l.total >= min && l.total <= max; });
+    return lotes;
+  }
+  async function processarCubiscan(cab, linhas, aviso) {
+    var iSku = cab.findIndex(function (h) { return /^sku/i.test(h); }), iPos = cab.findIndex(function (h) { return /posi[cç][aã]o\s*1|^location$/i.test(h); });
+    var iTask = cab.findIndex(function (h) { return /task/i.test(h); }), iCx = cab.findIndex(function (h) { return /caixa|asn/i.test(h); }), iPos2 = cab.findIndex(function (h) { return /posi[cç][aã]o\s*2/i.test(h); });
+    if (iSku < 0 || iPos < 0) throw new Error('Não achei as colunas SKU e Posição 1 no arquivo do Cubiscan.');
+    var min = +cfg.cubMin || 150, max = +cfg.cubMax || 230;
+    aviso('Montando a tabela de ruas…', 60);
+    var porRua = {}, semPos = [];
+    linhas.forEach(function (l) {
+      var loc = String(l[iPos] || '').trim();
+      var item = { sku: l[iSku], loc: loc, rua: ruaDe(loc), task: iTask >= 0 ? l[iTask] : '', cx: iCx >= 0 ? l[iCx] : '', pos2: iPos2 >= 0 ? l[iPos2] : '' };
+      if (!loc) return semPos.push(item);
+      (porRua[item.rua] = porRua[item.rua] || []).push(item);
+    });
+    var ruas = Object.keys(porRua).sort(ordemNatural).map(function (r) { return { rua: r, itens: porRua[r].sort(function (a, b) { return ordemNatural(a.loc, b.loc); }) }; });
+    aviso('Juntando ruas em lotes de ' + min + ' a ' + max + ' SKUs…', 70);
+    var lotes = montarLotes(ruas, min, max);
+    var loteDaRua = {};
+    lotes.forEach(function (l) { l.pedacos.forEach(function (p) { (loteDaRua[p.rua] = loteDaRua[p.rua] || []).push(l.n); }); });
+    function nomeAba(l) { return 'Lote ' + l.n + ' - ' + l.total + ' SKUs'; }
+    // Aba "Ruas" (a tabela dinâmica), colorida por lote, com link para a aba do lote
+    var linRuas = ruas.map(function (r) { var ns = loteDaRua[r.rua] || []; return [r.rua, String(r.itens.length), ns.map(function (n) { return 'Lote ' + n; }).join(' + ')]; });
+    var corRua = ruas.map(function (r) { var ns = loteDaRua[r.rua] || []; return ns.length ? 2 + (ns[0] - 1) % CORES_LOTE.length : 0; });
+    linRuas.push(['(sem posição)', String(semPos.length), '—'], ['Total', String(linhas.length), lotes.length + ' lotes']);
+    var links = ruas.map(function (r, i) { var ns = loteDaRua[r.rua] || []; return ns.length ? { ref: 'C' + (i + 2), alvo: "'" + nomeAba(lotes[ns[0] - 1]) + "'!A1", texto: linRuas[i][2] } : null; }).filter(Boolean);
+    var abaRuas = { nome: 'Ruas (dinâmica)', cab: ['Rua', 'Qtd SKU', 'Lote'], linhas: linRuas, op: { semFiltro: true, links: links,
+      estilo: function (i) { return i < ruas.length ? corRua[i] : (i === linRuas.length - 1 ? 9 : 8); } } };
+    var resumoLotes = { nome: 'Lotes', cab: ['Lote', 'SKUs', 'Ruas', 'Dentro da faixa?'], linhas: lotes.map(function (l) {
+      return ['Lote ' + l.n, String(l.total), l.pedacos.map(function (p) { return p.rua + (p.parte ? ' (parte ' + p.parte + ')' : ''); }).join(', '), l.ok ? 'Sim' : (l.total < min ? 'Abaixo de ' + min : 'Acima de ' + max)];
+    }), op: { semFiltro: true, estilo: function (i) { return 2 + i % CORES_LOTE.length; } } };
+    var abasLote = lotes.map(function (l) {
+      var its = []; l.pedacos.forEach(function (p) { its = its.concat(p.itens); });
+      return { nome: nomeAba(l), cab: ['SKU', 'location', 'rua', 'Task ID', 'Caixa (ASN)', 'Posicao 2'], linhas: its.map(function (x) { return [x.sku, x.loc, x.rua, x.task, x.cx, x.pos2]; }) };
+    });
+    aviso('Gerando a planilha…', 85);
+    var blob = await gerarXLSX([resumoLotes, abaRuas].concat(abasLote, [
+      { nome: 'Sem posição', cab: ['SKU', 'Task ID', 'Caixa (ASN)'], linhas: semPos.map(function (x) { return [x.sku, x.task, x.cx]; }) },
+      { nome: 'Unificado', cab: cab, linhas: linhas }]));
+    return { blob: blob, nome: 'Cubiscan_lotes_' + carimbo() + '.xlsx', total: linhas.length, comPos: linhas.length - semPos.length, semPos: semPos.length, lotes: lotes, ruas: ruas.length };
+  }
+
   /* ===================== INTERFACE ===================== */
   var host = document.createElement('div');
   host.id = ID;
@@ -309,6 +433,7 @@
       '<div class="logo"><span>⚙️</span><div>Painel Qualidade<small>Automações do WMS</small></div></div>' +
       '<div class="sec">Automações</div>' +
       '<button class="mi on" data-v="onhand">📦 On-Hand</button>' +
+      '<button class="mi" data-v="cub">📏 Cubiscan</button>' +
       '<button class="mi" disabled title="Em breve">🔜 Próxima automação</button>' +
       '<div class="sec">Sistema</div><button class="mi" data-v="config">🛠️ Configurações</button>' +
       '<div class="rod">v' + VERSAO + ' · roda com o seu login<button class="voltar" id="fechar">— Minimizar</button></div>' +
@@ -322,6 +447,16 @@
         '<div class="grid"><div class="card"><h3>🧹 Removidas por zona</h3><div class="zona-res" id="zres"></div></div>' +
           '<div class="card"><h3>📂 Já tem o arquivo baixado?</h3><div class="drop" id="drop">Arraste aqui o .zip / .csv / .xlsx do On-Hand<br><small>ou clique para escolher</small></div><input type="file" id="arq" multiple accept=".zip,.csv,.xlsx" hidden></div></div>' +
         '<div class="log" id="log"></div></section>' +
+      '<section class="view" id="v-cub"><h1>Cubiscan — lotes por rua</h1><p class="sub">Puxa o backlog do Cubiscan, monta a tabela de ruas e junta as ruas vizinhas em lotes de <b id="cubFaixa"></b> SKUs. Tudo numa planilha só.</p>' +
+        '<div class="hero"><div class="txt"><h2>📏 Montar lotes do Cubiscan</h2><p id="cubTxt"></p>' +
+          '<div class="prog" id="cprog"><div class="barra"><i id="cbarra"></i></div><div class="st" id="cst"></div></div></div>' +
+          '<button class="go" id="cgo">📏 Montar lotes</button></div>' +
+        '<div class="ultimo" id="cult"><button class="btn l" id="cdenovo">⬇️ Baixar a planilha de novo</button><span id="cultNome" style="color:#6b7280;font-size:13px"></span></div>' +
+        '<div class="kpis"><div class="k"><b id="c1">—</b><span>SKUs no backlog</span></div><div class="k"><b id="c2">—</b><span>com posição</span></div><div class="k"><b id="c3">—</b><span>sem posição</span></div><div class="k d"><b id="c4">—</b><span>lotes montados</span></div></div>' +
+        '<div class="grid"><div class="card"><h3>📦 Lotes</h3><div id="clotes" style="font-size:13px;color:#6b7280">Os lotes aparecem aqui.</div></div>' +
+          '<div class="card"><h3>📂 Ou use o CSV baixado</h3><div class="drop" id="cdrop">Arraste aqui o CSV do Cubiscan (Backlog → Baixar CSV)<br><small>ou clique para escolher</small></div><input type="file" id="carq" accept=".csv" hidden>' +
+          '<label>Faixa de SKUs por lote</label><div style="display:flex;gap:8px;align-items:center"><input id="cmin" type="number" style="width:90px;border:1px solid #e5e7eb;border-radius:8px;padding:7px"> até <input id="cmax" type="number" style="width:90px;border:1px solid #e5e7eb;border-radius:8px;padding:7px"></div></div></div>' +
+      '</section>' +
       '<section class="view" id="v-config"><h1>Configurações</h1><p class="sub">Ficam salvas neste navegador.</p><div class="card" style="max-width:560px">' +
         '<h3>On-Hand</h3><label>Zonas para remover (uma por linha)</label><textarea id="zonas"></textarea>' +
         '<label class="ck" style="margin-top:12px"><input type="checkbox" id="dup"> Remover linhas duplicadas</label>' +
@@ -420,6 +555,53 @@
   ['dragleave', 'drop'].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove('hv'); }); });
   drop.addEventListener('drop', function (e) { usarArquivos(e.dataTransfer.files); });
 
+
+  /* ---------- Tela do Cubiscan ---------- */
+  var cubUlt = null, noCub = naPaginaCubiscan();
+  $('cmin').value = cfg.cubMin; $('cmax').value = cfg.cubMax;
+  function faixaCub() { $('cubFaixa').textContent = cfg.cubMin + ' a ' + cfg.cubMax; }
+  faixaCub();
+  ['cmin', 'cmax'].forEach(function (id) { $(id).onchange = function () { cfg.cubMin = +$('cmin').value || 150; cfg.cubMax = +$('cmax').value || 230; if (cfg.cubMax < cfg.cubMin) cfg.cubMax = cfg.cubMin; salvarCfg(); faixaCub(); }; });
+  $('cubTxt').innerHTML = noCub ? 'Um clique: puxa o backlog do <b>BRFPE1</b> direto do Cubiscan, monta as ruas, junta em lotes e baixa a planilha pronta (com as ruas marcadas por cor).'
+    : 'O Cubiscan é outro site, então o painel precisa estar aberto <b>na página do Cubiscan</b>. Clique em <b>Abrir Cubiscan</b>, e lá clique no favorito <b>⚙️ Painel Qualidade</b> → <b>Montar lotes</b>.';
+  if (!noCub) $('cgo').textContent = '↗️ Abrir Cubiscan';
+  function cAviso(t, pct) { $('cprog').classList.add('on'); $('cst').textContent = t; if (pct != null) $('cbarra').style.width = Math.min(100, pct) + '%'; $('pilSt').textContent = '· ' + t; }
+  function mostrarLotes(r) {
+    $('c1').textContent = fmt(r.total); $('c2').textContent = fmt(r.comPos); $('c3').textContent = fmt(r.semPos); $('c4').textContent = fmt(r.lotes.length);
+    $('clotes').innerHTML = r.lotes.map(function (l) {
+      return '<div style="display:flex;gap:10px;align-items:flex-start;padding:7px 0;border-bottom:1px solid #f1f2f4"><span style="background:#' + CORES_LOTE[(l.n - 1) % CORES_LOTE.length] + ';border-radius:6px;padding:2px 8px;font-weight:700;color:#1f2328;white-space:nowrap">Lote ' + l.n + '</span>' +
+        '<span style="flex:1;color:#374151">' + escH(l.pedacos.map(function (p) { return p.rua.replace(/^BRFPE1-/, '') + (p.parte ? ' (' + p.parte + ')' : ''); }).join(', ')) + '</span><b style="color:' + (l.ok ? '#16a34a' : '#d97706') + '">' + l.total + '</b></div>';
+    }).join('');
+    cubUlt = r; $('cult').classList.add('on'); $('cultNome').textContent = r.nome;
+    log('✅ Cubiscan: ' + r.lotes.length + ' lotes montados (' + fmt(r.comPos) + ' SKUs com posição, ' + fmt(r.semPos) + ' sem posição) → ' + r.nome, 'ok');
+  }
+  async function rodarCub(obter) {
+    var b = $('cgo'); b.disabled = true; b.textContent = '⏳ Trabalhando…';
+    try {
+      var d = await obter();
+      var r = await processarCubiscan(d.cab, d.linhas, cAviso);
+      cAviso('✅ Pronto! A planilha foi baixada.' + (d.atualizado ? ' (dados do Cubiscan de ' + d.atualizado + ')' : ''), 100);
+      baixarBlob(r.blob, r.nome); mostrarLotes(r);
+    } catch (e) { cAviso('❌ ' + e.message, null); log('❌ ' + e.message, 'er'); }
+    b.disabled = false; b.textContent = noCub ? '📏 Montar lotes' : '↗️ Abrir Cubiscan';
+  }
+  $('cgo').onclick = function () {
+    if (!noCub) { window.open(CUB_URL, '_blank'); return; }
+    rodarCub(async function () { var r = await buscarBacklogCubiscan('BRFPE1', cAviso); return { cab: CUB_CAB, linhas: r.linhas, atualizado: r.atualizado }; });
+  };
+  $('cdenovo').onclick = function () { if (cubUlt) baixarBlob(cubUlt.blob, cubUlt.nome); };
+  function usarCsvCub(f) {
+    if (!f || !/\.csv$/i.test(f.name)) return log('⚠️ Escolha o .csv do Cubiscan', 'er');
+    rodarCub(async function () { var d = lerCSV(new TextDecoder('utf-8').decode(new Uint8Array(await f.arrayBuffer()))); return { cab: d.cab, linhas: d.linhas }; });
+  }
+  var cdrop = $('cdrop');
+  cdrop.onclick = function () { $('carq').click(); };
+  $('carq').onchange = function (e) { usarCsvCub(e.target.files[0]); e.target.value = ''; };
+  ['dragenter', 'dragover'].forEach(function (ev) { cdrop.addEventListener(ev, function (e) { e.preventDefault(); cdrop.classList.add('hv'); }); });
+  ['dragleave', 'drop'].forEach(function (ev) { cdrop.addEventListener(ev, function (e) { e.preventDefault(); cdrop.classList.remove('hv'); }); });
+  cdrop.addEventListener('drop', function (e) { usarCsvCub(e.dataTransfer.files[0]); });
+  if (noCub) raiz.querySelector('.mi[data-v=cub]').click();
+
   function preencherCfg() { $('zonas').value = cfg.zonas.join('\n'); $('dup').checked = !!cfg.dup; $('zres').innerHTML = cfg.zonas.map(function (z) { return '<div class="zr"><b>—</b>' + escH(z) + '</div>'; }).join(''); }
   $('salvar').onclick = function () {
     cfg.zonas = $('zonas').value.split('\n').map(function (s) { return s.trim().toUpperCase(); }).filter(Boolean); cfg.dup = $('dup').checked; salvarCfg(); preencherCfg();
@@ -428,7 +610,7 @@
   $('padrao').onclick = function () { cfg.zonas = ZONAS_PADRAO.slice(); cfg.dup = true; salvarCfg(); preencherCfg(); };
   preencherCfg();
 
-  if (location.hostname.indexOf('wms.') !== 0 && !window.__PAINEL_TESTE__) log('⚠️ Abra o painel com o WMS aberto para baixar direto. Arrastar arquivo funciona em qualquer lugar.', 'er');
+  if (location.hostname.indexOf('wms.') !== 0 && !naPaginaCubiscan() && !window.__PAINEL_TESTE__) log('⚠️ Abra o painel com o WMS aberto para baixar direto. Arrastar arquivo funciona em qualquer lugar.', 'er');
   log('Painel v' + VERSAO + ' pronto.');
-  if (window.__PAINEL_TESTE__) window.__PAINEL_TESTE__ = { processarOnHand: processarOnHand, lerArquivo: lerArquivo };
+  if (window.__PAINEL_TESTE__) window.__PAINEL_TESTE__ = { processarOnHand: processarOnHand, lerArquivo: lerArquivo, processarCubiscan: processarCubiscan, montarLotes: montarLotes };
 })();
