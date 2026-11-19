@@ -2,7 +2,7 @@
    Tudo roda no navegador de quem clicou, com o login dessa pessoa. Nenhum dado sai do PC. */
 (function () {
   'use strict';
-  var VERSAO = '1.3.0';
+  var VERSAO = '1.4.0';
   var ID = 'painel-qualidade-raiz';
   var ZONAS_PADRAO = ['AV', 'D', 'DEM', 'EXZO', 'MI', 'MO', 'OS', 'RO', 'TS', 'RTS'];
 
@@ -301,6 +301,20 @@
   }
 
 
+  /* ===================== PONTE COM O APP (Painel Qualidade.exe) ===================== */
+  var temApp = typeof window.painelPonte === 'function';
+  var pendentes = {};
+  window.__painelResposta = function (id, ok, json) { var p = pendentes[id]; if (!p) return; delete pendentes[id]; var d = JSON.parse(json); ok ? p.ok(d) : p.erro(new Error(d.erro || 'erro no app')); };
+  function ponte(acao, dados) {
+    return new Promise(function (ok, erro) {
+      var id = 'p' + Date.now() + Math.random().toString(36).slice(2, 6);
+      pendentes[id] = { ok: ok, erro: erro };
+      var pedido = dados || {}; pedido.id = id; pedido.acao = acao;
+      window.painelPonte(JSON.stringify(pedido));
+      setTimeout(function () { if (pendentes[id]) { delete pendentes[id]; erro(new Error('O app não respondeu a tempo.')); } }, 180000);
+    });
+  }
+
   /* ===================== CUBISCAN: backlog -> lotes de ruas ===================== */
   var CUB_URL = 'https://script.google.com/a/shopee.com/macros/s/AKfycbzfv3G8biAdsTp5DMWptXOwDgrMFwCCbAb50LQ72Hogbvj0A1wXpQB1uzYbN5M1gTEk/exec?page=cubscan';
   var CUB_CAB = ['Task ID', 'SKU', 'Caixa (ASN)', 'WH responsavel', 'WH fisico', 'Estoque', 'Posicao 1', 'Posicao 2', 'Operador', 'Turno', 'Tipo', 'Status', 'Criado em', 'Aging (dias)', 'Sem dimensao'];
@@ -493,7 +507,7 @@
       '<button class="mi" data-v="cub">📏 Cubiscan</button>' +
       '<button class="mi" disabled title="Em breve">🔜 Próxima automação</button>' +
       '<div class="sec">Sistema</div><button class="mi" data-v="config">🛠️ Configurações</button>' +
-      '<div class="rod">v' + VERSAO + ' · roda com o seu login<button class="voltar" id="fechar">— Minimizar</button></div>' +
+      '<div class="rod">v' + VERSAO + (temApp ? ' · app conectado ✓' : '') + ' · roda com o seu login<button class="voltar" id="fechar">— Minimizar</button></div>' +
     '</aside><main>' +
       '<section class="view on" id="v-onhand"><h1>On-Hand Inventory Map</h1><p class="sub">Baixa do WMS, junta as planilhas, remove as zonas da lista e entrega a planilha pronta.</p>' +
         '<div class="hero"><div class="txt"><h2>📥 Baixar On-Hand agora</h2><p>Um clique: o painel pede a exportação ao WMS, espera ficar pronta, junta tudo e baixa a planilha limpa. Pode levar alguns minutos — dá pra continuar usando o PC.</p>' +
@@ -573,6 +587,7 @@
   arrastar($('alca'), function (i, dx, dy) { jan.w = i.w + dx; jan.h = i.h + dy; });
   window.addEventListener('resize', function () { if (modo === 'janela') aplicar(); });
   window.__painelQualidade = { alternar: function () { minimizado ? restaurar() : minimizar(); } };
+  if (window.__painelApp) minimizado = true;
   aplicar();
 
 
@@ -620,8 +635,9 @@
   faixaCub();
   ['cmin', 'cmax'].forEach(function (id) { $(id).onchange = function () { cfg.cubMin = +$('cmin').value || 150; cfg.cubMax = +$('cmax').value || 230; if (cfg.cubMax < cfg.cubMin) cfg.cubMax = cfg.cubMin; salvarCfg(); faixaCub(); }; });
   $('cubTxt').innerHTML = noCub ? 'Um clique: puxa o backlog do <b>BRFPE1</b> direto do Cubiscan, monta as ruas, junta em lotes e baixa a planilha pronta (com as ruas marcadas por cor).'
-    : 'O Cubiscan é outro site, então o painel precisa estar aberto <b>na página do Cubiscan</b>. Clique em <b>Abrir Cubiscan</b>, e lá clique no favorito <b>⚙️ Painel Qualidade</b> → <b>Montar lotes</b>.';
-  if (!noCub) $('cgo').textContent = '↗️ Abrir Cubiscan';
+    : temApp ? 'Um clique: o app puxa o backlog do <b>BRFPE1</b> do Cubiscan em segundo plano, monta as ruas, junta em lotes e baixa a planilha pronta.'
+    : 'O Cubiscan é outro site, então pelo favorito o painel precisa estar aberto <b>na página do Cubiscan</b>. Clique em <b>Abrir Cubiscan</b>, e lá clique no favorito <b>⚙️ Painel Qualidade</b> → <b>Montar lotes</b>. <br><small>Com o app Painel Qualidade, dá pra fazer direto daqui.</small>';
+  if (!noCub && !temApp) $('cgo').textContent = '↗️ Abrir Cubiscan';
   function cAviso(t, pct) { $('cprog').classList.add('on'); $('cst').textContent = t; if (pct != null) $('cbarra').style.width = Math.min(100, pct) + '%'; $('pilSt').textContent = '· ' + t; }
   function mostrarLotes(r) {
     $('c1').textContent = fmt(r.total); $('c2').textContent = fmt(r.comPos); $('c3').textContent = fmt(r.semPos); $('c4').textContent = fmt(r.lotes.length);
@@ -640,9 +656,16 @@
       cAviso('✅ Pronto! A planilha foi baixada.' + (d.atualizado ? ' (dados do Cubiscan de ' + d.atualizado + ')' : ''), 100);
       baixarBlob(r.blob, r.nome); mostrarLotes(r);
     } catch (e) { cAviso('❌ ' + e.message, null); log('❌ ' + e.message, 'er'); }
-    b.disabled = false; b.textContent = noCub ? '📏 Montar lotes' : '↗️ Abrir Cubiscan';
+    b.disabled = false; b.textContent = (noCub || temApp) ? '📏 Montar lotes' : '↗️ Abrir Cubiscan';
   }
   $('cgo').onclick = function () {
+    if (!noCub && temApp) {
+      return rodarCub(async function () {
+        cAviso('Puxando o backlog do Cubiscan (em segundo plano)…', 15);
+        var r = await ponte('cubiscan', { whs: 'BRFPE1' });
+        return { cab: CUB_CAB, linhas: r.rows.map(function (row) { return CUB_MAPA.map(function (k) { var v = row[k]; return v == null ? '' : String(v); }); }), atualizado: r.lastUpdate };
+      });
+    }
     if (!noCub) { window.open(CUB_URL, '_blank'); return; }
     rodarCub(async function () { var r = await buscarBacklogCubiscan('BRFPE1', cAviso); return { cab: CUB_CAB, linhas: r.linhas, atualizado: r.atualizado }; });
   };

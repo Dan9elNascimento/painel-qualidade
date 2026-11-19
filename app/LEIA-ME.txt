@@ -1,0 +1,8 @@
+PAINEL QUALIDADE (app)
+
+1. Clique duas vezes em INICIAR.bat (ou no PainelQualidade.exe).
+2. Abre uma janela do Chrome so do painel, ja no WMS.
+3. Na primeira vez, faca login no WMS (e no Google, quando pedir). Fica salvo.
+4. O painel fica no botao laranja do canto inferior direito.
+
+Atualizacoes do painel sao automaticas. Nenhuma senha e guardada pelo app.
