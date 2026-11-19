@@ -2,12 +2,12 @@
    Tudo roda no navegador de quem clicou, com o login dessa pessoa. Nenhum dado sai do PC. */
 (function () {
   'use strict';
-  var VERSAO = '1.0.0';
+  var VERSAO = '1.1.0';
   var ID = 'painel-qualidade-raiz';
   var ZONAS_PADRAO = ['AV', 'D', 'DEM', 'EXZO', 'MI', 'MO', 'OS', 'RO', 'TS', 'RTS'];
 
   var antigo = document.getElementById(ID);
-  if (antigo) { antigo.style.display = antigo.style.display === 'none' ? '' : 'none'; return; }
+  if (antigo) { if (window.__painelQualidade) window.__painelQualidade.alternar(); else antigo.style.display = antigo.style.display === 'none' ? '' : 'none'; return; }
 
   /* ===================== UTILIDADES ===================== */
   var enc = new TextEncoder();
@@ -275,17 +275,17 @@
   /* ===================== INTERFACE ===================== */
   var host = document.createElement('div');
   host.id = ID;
-  host.style.cssText = 'position:fixed;inset:0;z-index:2147483646;';
+  host.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;z-index:2147483646;';
   document.body.appendChild(host);
   var raiz = host.attachShadow({ mode: 'open' });
   raiz.innerHTML = '<style>' +
     ':host{all:initial}*{box-sizing:border-box;margin:0;font-family:"Segoe UI",Roboto,Arial,sans-serif}' +
-    '.app{position:fixed;inset:0;display:flex;background:#f4f5f7;color:#1f2328;font-size:14px}' +
+    '.app{position:fixed;inset:0;display:flex;flex-direction:column;background:#f4f5f7;color:#1f2328;font-size:14px;overflow:hidden}' +'.app.janela{inset:auto;border-radius:12px;box-shadow:0 18px 60px rgba(0,0,0,.35);border:1px solid #2d333b}.app.oculto{display:none}' +'.barra-t{height:38px;flex:0 0 38px;background:#15181c;color:#e6e8eb;display:flex;align-items:center;gap:8px;padding:0 6px 0 14px;user-select:none;cursor:default}.app.janela .barra-t{cursor:move}' +'.barra-t b{font-size:13px;flex:1;font-weight:600}.barra-t b small{color:#8b929b;font-weight:400;margin-left:6px}' +'.wb{width:34px;height:28px;border:0;border-radius:7px;background:none;color:#cfd3da;cursor:pointer;font-size:15px;display:grid;place-items:center}.wb:hover{background:#2d333b;color:#fff}.wb.x:hover{background:#e5484d}' +'.corpo{flex:1;display:flex;min-height:0}' +'.alca{position:absolute;right:0;bottom:0;width:18px;height:18px;cursor:nwse-resize;display:none;background:linear-gradient(135deg,transparent 50%,#9aa1aa 50%,#9aa1aa 58%,transparent 58%,transparent 70%,#9aa1aa 70%,#9aa1aa 78%,transparent 78%)}.app.janela .alca{display:block}' +'.pilula{position:fixed;right:18px;bottom:18px;display:none;align-items:center;gap:10px;background:#1f2328;color:#fff;border:0;border-left:5px solid #EE4D2D;border-radius:12px;padding:11px 16px;font:600 13px Segoe UI,Arial,sans-serif;cursor:pointer;box-shadow:0 8px 28px rgba(0,0,0,.35);max-width:360px}.pilula.on{display:flex}.pilula:hover{background:#2d333b}.pilula small{font-weight:400;color:#cfd3da}' +
     'aside{width:230px;background:#1f2328;color:#cfd3da;display:flex;flex-direction:column;padding:18px 12px}' +
     '.logo{color:#fff;font-weight:700;font-size:16px;padding:2px 8px 20px;display:flex;gap:10px;align-items:center}.logo span{background:#EE4D2D;border-radius:9px;width:34px;height:34px;display:grid;place-items:center;font-size:18px}.logo small{display:block;font-weight:400;color:#8b929b;font-size:11px}' +
     '.sec{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:#7d8590;padding:12px 10px 6px}' +
     '.mi{display:flex;gap:10px;align-items:center;width:100%;padding:10px 12px;border-radius:9px;border:0;background:none;color:inherit;cursor:pointer;font-size:14px;text-align:left}.mi:hover{background:#2d333b}.mi.on{background:#EE4D2D;color:#fff;font-weight:600}.mi[disabled]{opacity:.4;cursor:default;background:none}' +
-    '.rod{margin-top:auto;font-size:11px;color:#7d8590;padding:10px}.voltar{margin-top:8px;background:#2d333b;color:#fff;border:0;border-radius:9px;padding:10px;cursor:pointer;font-weight:600;width:100%}.voltar:hover{background:#3a414a}' +
+    '.rod{margin-top:auto;font-size:11px;color:#7d8590;padding:10px}.app.janela aside{width:200px}.voltar{margin-top:8px;background:#2d333b;color:#fff;border:0;border-radius:9px;padding:10px;cursor:pointer;font-weight:600;width:100%}.voltar:hover{background:#3a414a}' +
     'main{flex:1;overflow:auto;padding:28px 34px}h1{font-size:23px;margin-bottom:3px}.sub{color:#6b7280;margin-bottom:22px}' +
     '.view{display:none}.view.on{display:block}' +
     '.hero{background:linear-gradient(120deg,#EE4D2D,#ff7a45);color:#fff;border-radius:16px;padding:24px 26px;display:flex;gap:24px;align-items:center;box-shadow:0 10px 30px rgba(238,77,45,.25)}' +
@@ -302,15 +302,16 @@
     '.ck{display:flex;gap:8px;align-items:center;font-weight:400;font-size:13px}' +
     '.btn{border:0;border-radius:9px;padding:9px 14px;font-weight:600;cursor:pointer;background:#eef0f3;color:#1f2328;font-size:13px}.btn.l{background:#EE4D2D;color:#fff}' +
     '.log{margin-top:18px;background:#1f2328;color:#d1d5db;border-radius:14px;padding:12px 14px;font:12px Consolas,monospace;height:140px;overflow:auto;white-space:pre-wrap}.ok{color:#4ade80}.er{color:#f87171}' +
+    'main{container-type:inline-size}@container (max-width:860px){.kpis{grid-template-columns:repeat(2,1fr)}.grid{grid-template-columns:1fr}.hero{flex-direction:column;align-items:stretch}.zona-res{grid-template-columns:repeat(3,1fr)}}' +
     '.ultimo{display:none;margin-top:12px}.ultimo.on{display:flex;gap:10px;align-items:center}' +
     '</style>' +
-    '<div class="app"><aside>' +
+    '<button class="pilula" id="pilula" title="Abrir o painel">⚙️ Painel Qualidade <small id="pilSt"></small></button>' +'<div class="app" id="app"><div class="barra-t" id="barraT"><b>⚙️ Painel Qualidade<small>v' + VERSAO + '</small></b>' +'<button class="wb" id="bMin" title="Minimizar">—</button><button class="wb" id="bMax" title="Modo janela">❐</button><button class="wb x" id="bFec" title="Fechar o painel">✕</button></div>' +'<div class="corpo"><aside>' +
       '<div class="logo"><span>⚙️</span><div>Painel Qualidade<small>Automações do WMS</small></div></div>' +
       '<div class="sec">Automações</div>' +
       '<button class="mi on" data-v="onhand">📦 On-Hand</button>' +
       '<button class="mi" disabled title="Em breve">🔜 Próxima automação</button>' +
       '<div class="sec">Sistema</div><button class="mi" data-v="config">🛠️ Configurações</button>' +
-      '<div class="rod">v' + VERSAO + ' · roda com o seu login<button class="voltar" id="fechar">← Voltar ao WMS</button></div>' +
+      '<div class="rod">v' + VERSAO + ' · roda com o seu login<button class="voltar" id="fechar">— Minimizar</button></div>' +
     '</aside><main>' +
       '<section class="view on" id="v-onhand"><h1>On-Hand Inventory Map</h1><p class="sub">Baixa do WMS, junta as planilhas, remove as zonas da lista e entrega a planilha pronta.</p>' +
         '<div class="hero"><div class="txt"><h2>📥 Baixar On-Hand agora</h2><p>Um clique: o painel pede a exportação ao WMS, espera ficar pronta, junta tudo e baixa a planilha limpa. Pode levar alguns minutos — dá pra continuar usando o PC.</p>' +
@@ -326,11 +327,11 @@
         '<label class="ck" style="margin-top:12px"><input type="checkbox" id="dup"> Remover linhas duplicadas</label>' +
         '<div style="margin-top:14px;display:flex;gap:8px"><button class="btn l" id="salvar">Salvar</button><button class="btn" id="padrao">Voltar ao padrão</button><span id="msg" class="ok" style="align-self:center;font-size:13px"></span></div>' +
       '</div></section>' +
-    '</main></div>';
+    '</main></div><div class="alca" id="alca" title="Arraste para mudar o tamanho"></div></div>';
 
   var $ = function (id) { return raiz.getElementById(id); };
   function log(t, c) { var l = $('log'), d = document.createElement('div'); if (c) d.className = c; d.textContent = '[' + new Date().toLocaleTimeString('pt-BR') + '] ' + t; l.appendChild(d); l.scrollTop = l.scrollHeight; }
-  function aviso(t, pct) { $('prog').classList.add('on'); $('st').textContent = t; if (pct != null) $('barra').style.width = Math.min(100, pct) + '%'; }
+  function aviso(t, pct) { $('prog').classList.add('on'); $('st').textContent = t; if (pct != null) $('barra').style.width = Math.min(100, pct) + '%'; $('pilSt').textContent = '· ' + t; }
   var ultimo = null;
 
   raiz.querySelectorAll('.mi[data-v]').forEach(function (b) {
@@ -339,7 +340,49 @@
       raiz.querySelectorAll('.view').forEach(function (v) { v.classList.remove('on'); }); $('v-' + b.dataset.v).classList.add('on');
     };
   });
-  $('fechar').onclick = function () { host.style.display = 'none'; };
+  
+  /* ---------- Janela: maximizado / janela / minimizado, mover e redimensionar ---------- */
+  var app = $('app'), pil = $('pilula');
+  var jan = cfg.janela || { x: 60, y: 40, w: Math.min(1100, window.innerWidth - 120), h: Math.min(720, window.innerHeight - 80) };
+  var modo = cfg.modo === 'janela' ? 'janela' : 'max', minimizado = false;
+  function limitar() {
+    var vw = window.innerWidth, vh = window.innerHeight;
+    jan.w = Math.max(Math.min(640, vw), Math.min(jan.w, vw)); jan.h = Math.max(Math.min(420, vh), Math.min(jan.h, vh));
+    jan.x = Math.max(0, Math.min(jan.x, vw - jan.w)); jan.y = Math.max(0, Math.min(jan.y, vh - jan.h));
+  }
+  function aplicar() {
+    app.classList.toggle('oculto', minimizado); pil.classList.toggle('on', minimizado);
+    app.classList.toggle('janela', modo === 'janela');
+    if (modo === 'janela') { limitar(); app.style.left = jan.x + 'px'; app.style.top = jan.y + 'px'; app.style.width = jan.w + 'px'; app.style.height = jan.h + 'px'; }
+    else { app.style.left = app.style.top = app.style.width = app.style.height = ''; }
+    $('bMax').textContent = modo === 'janela' ? '☐' : '❐'; $('bMax').title = modo === 'janela' ? 'Tela cheia' : 'Modo janela';
+    if (!minimizado) $('pilSt').textContent = '';
+  }
+  function guardarJanela() { cfg.janela = jan; cfg.modo = modo; salvarCfg(); }
+  function minimizar() { minimizado = true; aplicar(); }
+  function restaurar() { minimizado = false; aplicar(); }
+  $('bMin').onclick = minimizar; $('fechar').onclick = minimizar; pil.onclick = restaurar;
+  $('bMax').onclick = function () { modo = modo === 'janela' ? 'max' : 'janela'; aplicar(); guardarJanela(); };
+  $('barraT').addEventListener('dblclick', function (e) { if (e.target.tagName !== 'BUTTON') $('bMax').onclick(); });
+  $('bFec').onclick = function () {
+    if ($('go').disabled && !confirm('Tem uma automação rodando. Fechar mesmo assim?')) return;
+    host.remove(); delete window.__painelQualidade;
+  };
+  function arrastar(el, aoMover) {
+    el.addEventListener('mousedown', function (e) {
+      if (modo !== 'janela' || e.button !== 0 || e.target.tagName === 'BUTTON') return;
+      e.preventDefault(); var sx = e.clientX, sy = e.clientY, ini = { x: jan.x, y: jan.y, w: jan.w, h: jan.h };
+      function mov(ev) { aoMover(ini, ev.clientX - sx, ev.clientY - sy); aplicar(); }
+      function sol() { document.removeEventListener('mousemove', mov); document.removeEventListener('mouseup', sol); guardarJanela(); }
+      document.addEventListener('mousemove', mov); document.addEventListener('mouseup', sol);
+    });
+  }
+  arrastar($('barraT'), function (i, dx, dy) { jan.x = i.x + dx; jan.y = i.y + dy; });
+  arrastar($('alca'), function (i, dx, dy) { jan.w = i.w + dx; jan.h = i.h + dy; });
+  window.addEventListener('resize', function () { if (modo === 'janela') aplicar(); });
+  window.__painelQualidade = { alternar: function () { minimizado ? restaurar() : minimizar(); } };
+  aplicar();
+
 
   function mostrarResultado(r) {
     $('k1').textContent = fmt(r.arquivos); $('k2').textContent = fmt(r.lidas);
