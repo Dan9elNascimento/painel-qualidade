@@ -2,7 +2,7 @@
    Tudo roda no navegador de quem clicou, com o login dessa pessoa. Nenhum dado sai do PC. */
 (function () {
   'use strict';
-  var VERSAO = '1.5.2';
+  var VERSAO = '1.6.0';
   var ID = 'painel-qualidade-raiz';
   var ZONAS_PADRAO = ['AV', 'D', 'DEM', 'EXZO', 'MI', 'MO', 'OS', 'RO', 'TS', 'RTS'];
 
@@ -535,6 +535,7 @@
       '<div class="sec">Automações</div>' +
       '<button class="mi on" data-v="onhand">📦 On-Hand</button>' +
       '<button class="mi" data-v="cub">📏 Cubiscan</button>' +
+      '<button class="mi" data-v="rt">🔁 Rack Transfer</button>' +
       '<button class="mi" disabled title="Em breve">🔜 Próxima automação</button>' +
       '<div class="sec">Sistema</div><button class="mi" data-v="config">🛠️ Configurações</button>' +
       '<div class="rod">v' + VERSAO + (temApp ? ' · app conectado ✓' : '') + ' · roda com o seu login<button class="voltar" id="fechar">— Minimizar</button></div>' +
@@ -557,6 +558,13 @@
         '<div class="grid"><div class="card"><h3>📦 Lotes</h3><div id="clotes" style="font-size:13px;color:#6b7280">Os lotes aparecem aqui.</div></div>' +
           '<div class="card"><h3>📂 Ou use o CSV baixado</h3><div class="drop" id="cdrop">Arraste aqui o CSV do Cubiscan (Backlog → Baixar CSV)<br><small>ou clique para escolher</small></div><input type="file" id="carq" accept=".csv" hidden>' +
           '<label>Faixa de SKUs por lote</label><div style="display:flex;gap:8px;align-items:center"><input id="cmin" type="number" style="width:90px;border:1px solid #e5e7eb;border-radius:8px;padding:7px"> até <input id="cmax" type="number" style="width:90px;border:1px solid #e5e7eb;border-radius:8px;padding:7px"></div></div></div>' +
+      '</section>' +
+      '<section class="view" id="v-rt"><h1>Rack Transfer — ajustar quantidades</h1><p class="sub">Use na tela <b>Rack Transfer → Create</b> do WMS, com a lista de SKUs aberta.</p>' +
+        '<div class="hero"><div class="txt"><h2>🔁 Colocar 1 unidade em todos</h2><p>Mostra 200 por página, coloca <b>1</b> em todo <b>Suggested Putaway Qty</b> e, se aparecer <b>“More than Suggested Pick Qty”</b>, remove esses SKUs (pede confirmação antes). Depois é só conferir e clicar em <b>Confirm Task</b>.</p>' +
+          '<div class="prog" id="rprog"><div class="barra"><i id="rbarra"></i></div><div class="st" id="rst"></div></div></div>' +
+          '<button class="go" id="rgo">🔁 Ajustar tudo</button></div>' +
+        '<div class="kpis"><div class="k"><b id="r1">—</b><span>SKUs na lista</span></div><div class="k"><b id="r2">—</b><span>ajustados para 1</span></div><div class="k"><b id="r3">—</b><span>com aviso</span></div><div class="k d"><b id="r4">—</b><span>removidos</span></div></div>' +
+        '<label class="ck" style="margin-top:14px"><input type="checkbox" id="rremover" checked> Remover os SKUs com “More than Suggested Pick Qty”</label>' +
       '</section>' +
       '<section class="view" id="v-config"><h1>Configurações</h1><p class="sub">Ficam salvas neste navegador.</p><div class="card" style="max-width:560px">' +
         '<h3>On-Hand</h3><label>Zonas para remover (uma por linha)</label><textarea id="zonas"></textarea>' +
@@ -711,6 +719,92 @@
   ['dragleave', 'drop'].forEach(function (ev) { cdrop.addEventListener(ev, function (e) { e.preventDefault(); cdrop.classList.remove('hv'); }); });
   cdrop.addEventListener('drop', function (e) { usarCsvCub(e.dataTransfer.files[0]); });
   if (noCub) raiz.querySelector('.mi[data-v=cub]').click();
+
+
+  /* ---------- Rack Transfer: 200 por página, Suggested Putaway Qty = 1, remove os com aviso ---------- */
+  function visivel(el) { return !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length)); }
+  function textoDe(el) { return (el.textContent || '').replace(/\s+/g, ' ').trim(); }
+  function clicar(el) { ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(function (t) { el.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window })); }); }
+  function definirValor(inp, v) {
+    var set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    inp.focus(); set.call(inp, v);
+    inp.dispatchEvent(new Event('input', { bubbles: true })); inp.dispatchEvent(new Event('change', { bubbles: true }));
+    inp.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: '1' })); inp.blur(); inp.dispatchEvent(new Event('blur', { bubbles: true }));
+  }
+  async function porPagina200() {
+    var cands = [].filter.call(document.querySelectorAll('div,span,input'), function (el) {
+      return visivel(el) && el.children.length <= 3 && /^\s*\d+\s*\/\s*(page|pá|pag|pa)/i.test(textoDe(el) || el.value || '') && !el.closest('#' + ID);
+    });
+    var atual = cands[cands.length - 1];
+    if (!atual) return 'sem seletor';
+    if (/^\s*200\s*\//.test(textoDe(atual) || atual.value || '')) return 'já está em 200';
+    clicar(atual); var sel = atual.closest('[class*=select]'); if (sel) clicar(sel);
+    for (var t = 0; t < 15; t++) {
+      await esperar(200);
+      var op = [].filter.call(document.querySelectorAll('li,div[class*=option],div[class*=item]'), function (el) { return visivel(el) && /^\s*200\s*\/\s*\w*/i.test(textoDe(el)) && el.children.length <= 2; })[0];
+      if (op) { clicar(op); await esperar(1500); return 'mudou para 200'; }
+    }
+    return 'não achei a opção 200';
+  }
+  function inputsPutaway() {
+    var th = [].filter.call(document.querySelectorAll('th'), function (el) { return /suggested\s*putaway\s*qty|putaway\s*sugerid/i.test(textoDe(el)); })[0];
+    if (!th) return null;
+    var col = th.cellIndex, base = th.closest('[class*=table-wrapper],[class*=table-container],[class*=-table]:not(table)') || th.closest('table').parentElement;
+    for (var k = 0; k < 4 && base && !base.querySelector('tbody tr td'); k++) base = base.parentElement;
+    var res = [];
+    [].forEach.call((base || document).querySelectorAll('tbody tr'), function (tr) {
+      var td = tr.cells[col], inp = td && td.querySelector('input:not([disabled]):not([readonly])');
+      if (inp && visivel(inp)) res.push({ tr: tr, inp: inp });
+    });
+    return res;
+  }
+  function linhasComAviso() {
+    return [].filter.call(document.querySelectorAll('tbody tr'), function (tr) { return visivel(tr) && /more than suggested pick qty/i.test(textoDe(tr)); });
+  }
+  async function confirmarPopup() {
+    for (var t = 0; t < 8; t++) {
+      await esperar(200);
+      var b = [].filter.call(document.querySelectorAll('button'), function (el) {
+        return visivel(el) && !el.closest('#' + ID) && /^(ok|confirm|confirmar|yes|sim)$/i.test(textoDe(el)) && el.closest('[class*=popconfirm],[class*=popover],[class*=modal],[class*=dialog],[role=dialog],[class*=popup]');
+      })[0];
+      if (b) { clicar(b); return true; }
+    }
+    return false;
+  }
+  function rAviso(t, pct) { $('rprog').classList.add('on'); $('rst').textContent = t; if (pct != null) $('rbarra').style.width = Math.min(100, pct) + '%'; $('pilSt').textContent = '· ' + t; }
+  $('rgo').onclick = async function () {
+    var b = $('rgo'); b.disabled = true; b.textContent = '⏳ Ajustando…';
+    var estava = minimizado; minimizar();
+    try {
+      if (!inputsPutaway()) throw new Error('Abra a tela Rack Transfer → Create com a lista de SKUs antes.');
+      rAviso('Mostrando 200 por página…', 10); var pg = await porPagina200(); log('Rack Transfer: página — ' + pg);
+      var its = inputsPutaway() || [];
+      $('r1').textContent = fmt(its.length);
+      its.forEach(function (x, k) { definirValor(x.inp, '1'); if (k % 10 === 0) rAviso('Colocando 1… (' + (k + 1) + '/' + its.length + ')', 20 + 50 * k / its.length); });
+      await esperar(800);
+      var ok = (inputsPutaway() || []).filter(function (x) { return x.inp.value === '1'; }).length;
+      $('r2').textContent = fmt(ok);
+      var avisos = linhasComAviso(); $('r3').textContent = fmt(avisos.length);
+      var removidos = 0;
+      if (avisos.length && $('rremover').checked) {
+        if (confirm('Painel Qualidade\n\n' + avisos.length + ' SKU(s) estão com "More than Suggested Pick Qty".\nRemover esses SKUs da tarefa?')) {
+          for (var t = 0; t < avisos.length + 5; t++) {
+            var tr = linhasComAviso()[0]; if (!tr) break;
+            var rem = [].filter.call(tr.querySelectorAll('a,button,span'), function (el) { return /^(remove|remover)$/i.test(textoDe(el)); })[0];
+            if (!rem) { log('⚠️ Não achei o botão Remove numa linha.', 'er'); break; }
+            rAviso('Removendo SKUs com aviso… (' + (removidos + 1) + '/' + avisos.length + ')', 75 + 20 * removidos / avisos.length);
+            clicar(rem); await confirmarPopup(); removidos++;
+            await esperar(1500);
+          }
+        }
+      }
+      $('r4').textContent = fmt(removidos);
+      rAviso('✅ Pronto: ' + ok + ' com 1 unidade' + (removidos ? ', ' + removidos + ' removido(s)' : '') + '. Confira e clique em Confirm Task.', 100);
+      log('✅ Rack Transfer: ' + ok + ' ajustados para 1, ' + avisos.length + ' com aviso, ' + removidos + ' removidos.', 'ok');
+    } catch (e) { rAviso('❌ ' + e.message, null); log('❌ ' + e.message, 'er'); restaurar(); }
+    b.disabled = false; b.textContent = '🔁 Ajustar tudo';
+    if (!estava && false) restaurar();
+  };
 
   function preencherCfg() { $('zonas').value = cfg.zonas.join('\n'); $('dup').checked = !!cfg.dup; $('zres').innerHTML = cfg.zonas.map(function (z) { return '<div class="zr"><b>—</b>' + escH(z) + '</div>'; }).join(''); }
   $('salvar').onclick = function () {
