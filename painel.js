@@ -2,7 +2,7 @@
    Tudo roda no navegador de quem clicou, com o login dessa pessoa. Nenhum dado sai do PC. */
 (function () {
   'use strict';
-  var VERSAO = '1.2.2';
+  var VERSAO = '1.3.0';
   var ID = 'painel-qualidade-raiz';
   var ZONAS_PADRAO = ['AV', 'D', 'DEM', 'EXZO', 'MI', 'MO', 'OS', 'RO', 'TS', 'RTS'];
 
@@ -188,6 +188,7 @@
     for (var i = 0; i < linhas.length; i++) {
       var l = linhas[i], r = i + 2, s = '<row r="' + r + '">', st = op.estilo ? op.estilo(i) : 0, sa = st ? ' s="' + st + '"' : '';
       for (var j = 0; j < (st ? cab.length : l.length); j++) {
+        if (l[j] && typeof l[j] === 'object' && l[j].f) { var sf = op.estiloCel ? (op.estiloCel(i, j) || sa) : sa; if (typeof sf === 'number') sf = ' s="' + sf + '"'; s += '<c r="' + L[j] + r + '"' + sf + ' t="str"><f>' + escX(l[j].f) + '</f><v>' + escX(l[j].v || '') + '</v></c>'; continue; }
         var v = l[j] == null ? '' : String(l[j]).trim();
         if (v === '') { if (st) s += '<c r="' + L[j] + r + '"' + sa + '/>'; continue; }
         var sj = op.estiloCel ? (op.estiloCel(i, j) || sa) : sa; if (typeof sj === 'number') sj = ' s="' + sj + '"';
@@ -198,16 +199,22 @@
     }
     partes.push(buf.join(''));
     partes.push('</sheetData>' + (op.semFiltro ? '' : '<autoFilter ref="A1:' + L[cab.length - 1] + (linhas.length + 1) + '"/>') +
-      (op.links && op.links.length ? '<hyperlinks>' + op.links.map(function (k) { return '<hyperlink ref="' + k.ref + '" location="' + escX(k.alvo).replace(/"/g, '&quot;') + '" display="' + escX(k.texto || '') + '"/>'; }).join('') + '</hyperlinks>' : '') + '</worksheet>');
+      (op.cf || '') + (op.links && op.links.length ? '<hyperlinks>' + op.links.map(function (k) { return '<hyperlink ref="' + k.ref + '" location="' + escX(k.alvo).replace(/"/g, '&quot;') + '" display="' + escX(k.texto || '') + '"/>'; }).join('') + '</hyperlinks>' : '') + '</worksheet>');
     return new Blob(partes);
   }
   async function gerarXLSX(abas) {
     var tipos = abas.map(function (_, i) { return '<Override PartName="/xl/worksheets/sheet' + (i + 1) + '.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'; }).join('');
+    var piv = abas.map(function (a, i) { return a.pivot ? i : -1; }).filter(function (i) { return i >= 0; });
+    piv.forEach(function (i, k) { var n = k + 1;
+      tipos += '<Override PartName="/xl/pivotTables/pivotTable' + n + '.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotTable+xml"/>' +
+        '<Override PartName="/xl/pivotCache/pivotCacheDefinition' + n + '.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml"/>' +
+        '<Override PartName="/xl/pivotCache/pivotCacheRecords' + n + '.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheRecords+xml"/>'; });
+    var R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/', CAB_REL = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">';
     var fixos = [
       ['[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' + tipos + '</Types>'],
       ['_rels/.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'],
-      ['xl/workbook.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>' + abas.map(function (a, i) { return '<sheet name="' + escX(a.nome).slice(0, 31) + '" sheetId="' + (i + 1) + '" r:id="rId' + (i + 1) + '"/>'; }).join('') + '</sheets></workbook>'],
-      ['xl/_rels/workbook.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' + abas.map(function (_, i) { return '<Relationship Id="rId' + (i + 1) + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet' + (i + 1) + '.xml"/>'; }).join('') + '<Relationship Id="rId' + (abas.length + 1) + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'],
+      ['xl/workbook.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>' + abas.map(function (a, i) { return '<sheet name="' + escX(a.nome).slice(0, 31) + '" sheetId="' + (i + 1) + '" r:id="rId' + (i + 1) + '"/>'; }).join('') + '</sheets>' + (piv.length ? '<pivotCaches>' + piv.map(function (_, k) { return '<pivotCache cacheId="' + (k + 1) + '" r:id="rIdP' + (k + 1) + '"/>'; }).join('') + '</pivotCaches>' : '') + '</workbook>'],
+      ['xl/_rels/workbook.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' + abas.map(function (_, i) { return '<Relationship Id="rId' + (i + 1) + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet' + (i + 1) + '.xml"/>'; }).join('') + '<Relationship Id="rId' + (abas.length + 1) + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>' + piv.map(function (_, k) { return '<Relationship Id="rIdP' + (k + 1) + '" Type="' + R + 'pivotCacheDefinition" Target="pivotCache/pivotCacheDefinition' + (k + 1) + '.xml"/>'; }).join('') + '</Relationships>'],
       ['xl/styles.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
         '<fonts count="4"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font><font><u/><sz val="11"/><color rgb="FF1155CC"/><name val="Calibri"/></font></fonts>' +
         '<fills count="10"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFEE4D2D"/></patternFill></fill>' +
@@ -216,11 +223,20 @@
         '<cellXfs count="12"><xf xfId="0"/><xf xfId="0" fontId="1" fillId="2" applyFont="1" applyFill="1"/>' +
         CORES_LOTE.map(function (_, i) { return '<xf xfId="0" fillId="' + (3 + i) + '" applyFill="1"/>'; }).join('') +
         '<xf xfId="0" fontId="2" applyFont="1"/><xf xfId="0" fontId="2" fillId="9" applyFont="1" applyFill="1"/><xf xfId="0" fontId="3" applyFont="1"/><xf xfId="0" fontId="2" fillId="2" applyFont="1" applyFill="1"/></cellXfs>' +
-        '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>']
+        '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles><dxfs count="' + CORES_LOTE.length + '">' + CORES_LOTE.map(function (c) { return '<dxf><fill><patternFill patternType="solid"><fgColor rgb="FF' + c + '"/><bgColor rgb="FF' + c + '"/></patternFill></fill></dxf>'; }).join('') + '</dxfs></styleSheet>']
     ];
     var entradas = [];
     for (var i = 0; i < fixos.length; i++) entradas.push(await prepararEntrada(fixos[i][0], new Blob([fixos[i][1]])));
     for (var a = 0; a < abas.length; a++) entradas.push(await prepararEntrada('xl/worksheets/sheet' + (a + 1) + '.xml', abaXML(abas[a].cab, abas[a].linhas, abas[a].op)));
+    for (var k = 0; k < piv.length; k++) {
+      var n = k + 1, pv = abas[piv[k]].pivot;
+      entradas.push(await prepararEntrada('xl/worksheets/_rels/sheet' + (piv[k] + 1) + '.xml.rels', new Blob([CAB_REL + '<Relationship Id="rId1" Type="' + R + 'pivotTable" Target="../pivotTables/pivotTable' + n + '.xml"/></Relationships>'])));
+      entradas.push(await prepararEntrada('xl/pivotTables/pivotTable' + n + '.xml', new Blob([pv.tabela.replace('cacheId="1"', 'cacheId="' + n + '"')])));
+      entradas.push(await prepararEntrada('xl/pivotTables/_rels/pivotTable' + n + '.xml.rels', new Blob([CAB_REL + '<Relationship Id="rId1" Type="' + R + 'pivotCacheDefinition" Target="../pivotCache/pivotCacheDefinition' + n + '.xml"/></Relationships>'])));
+      entradas.push(await prepararEntrada('xl/pivotCache/pivotCacheDefinition' + n + '.xml', new Blob([pv.definicao])));
+      entradas.push(await prepararEntrada('xl/pivotCache/_rels/pivotCacheDefinition' + n + '.xml.rels', new Blob([CAB_REL + '<Relationship Id="rId1" Type="' + R + 'pivotCacheRecords" Target="pivotCacheRecords' + n + '.xml"/></Relationships>'])));
+      entradas.push(await prepararEntrada('xl/pivotCache/pivotCacheRecords' + n + '.xml', new Blob(pv.registros)));
+    }
     return montarZip(entradas, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   }
 
@@ -394,25 +410,45 @@
     lotes.forEach(function (l, i) { l.n = i + 1; });
     var loteDaRua = {};
     lotes.forEach(function (l) { l.pedacos.forEach(function (p) { (loteDaRua[p.rua] = loteDaRua[p.rua] || []).push(l.n); }); });
-    function nomeAba(l) { return 'Lote ' + l.n + ' - ' + l.total + ' SKUs'; }
-    // Aba "Ruas" (a tabela dinâmica), colorida por lote, com link para a aba do lote
-    var linRuas = ruas.map(function (r) { var ns = loteDaRua[r.rua] || []; return [r.rua, String(r.itens.length), ns.map(function (n) { return 'Lote ' + n; }).join(' + ')]; });
-    var corRua = ruas.map(function (r) { var ns = loteDaRua[r.rua] || []; return ns.length ? 2 + (ns[0] - 1) % CORES_LOTE.length : 0; });
-    linRuas.push(['(sem posição)', String(semPos.length), '—'], ['Total', String(linhas.length), lotes.length + ' lotes']);
-    var links = ruas.map(function (r, i) { var ns = loteDaRua[r.rua] || []; return ns.length ? { ref: 'C' + (i + 2), alvo: "'" + nomeAba(lotes[ns[0] - 1]) + "'!A1", texto: linRuas[i][2] } : null; }).filter(Boolean);
-    var abaRuas = { nome: 'Ruas (dinâmica)', cab: ['Rua', 'Qtd SKU', 'Lote'], linhas: linRuas, op: { semFiltro: true, links: links,
-      estilo: function (i) { return i < ruas.length ? corRua[i] : (i === linRuas.length - 1 ? 9 : 8); } } };
+    // procv: SKU / location / rua / lote (todas as linhas, inclusive sem posição)
+    var procv = linhas.map(function (l) {
+      var loc = String(l[iPos] || '').trim(), rua = loc ? ruaDe(loc) : '', ns = loteDaRua[rua] || [];
+      return [l[iSku], loc, rua, ns.length ? 'Lote ' + ns[0] : ''];
+    });
+    // Tabela dinâmica de verdade: linhas = rua, valores = CONT.VALORES de SKU (2 cliques abre o detalhe)
+    var unicas = Object.keys(procv.reduce(function (o, r) { o[r[2]] = 1; return o; }, {})).sort(function (a, b) { return a === b ? 0 : a < b ? -1 : 1; });
+    var idx = {}; unicas.forEach(function (u, k) { idx[u] = k; });
+    var cont = unicas.map(function () { return 0; }); procv.forEach(function (r) { cont[idx[r[2]]]++; });
+    var N = procv.length, K = unicas.length;
+    var definicao = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId1" refreshOnLoad="1" createdVersion="6" refreshedVersion="6" minRefreshableVersion="3" recordCount="' + N + '">' +
+      '<cacheSource type="worksheet"><worksheetSource ref="A1:D' + (N + 1) + '" sheet="procv"/></cacheSource><cacheFields count="4">' +
+      '<cacheField name="SKU" numFmtId="0"><sharedItems/></cacheField><cacheField name="location" numFmtId="0"><sharedItems containsBlank="1"/></cacheField>' +
+      '<cacheField name="rua" numFmtId="0"><sharedItems containsBlank="1" count="' + K + '">' + unicas.map(function (u) { return u ? '<s v="' + escX(u).replace(/"/g, '&quot;') + '"/>' : '<m/>'; }).join('') + '</sharedItems></cacheField>' +
+      '<cacheField name="lote" numFmtId="0"><sharedItems containsBlank="1"/></cacheField></cacheFields></pivotCacheDefinition>';
+    var q = function (v) { return v ? '<s v="' + escX(v).replace(/"/g, '&quot;') + '"/>' : '<m/>'; };
+    var registros = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?><pivotCacheRecords xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" count="' + N + '">'];
+    procv.forEach(function (r) { registros.push('<r>' + q(r[0]) + q(r[1]) + '<x v="' + idx[r[2]] + '"/>' + q(r[3]) + '</r>'); });
+    registros.push('</pivotCacheRecords>');
+    var tabela = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="TabelaDinamica1" cacheId="1" applyNumberFormats="0" applyBorderFormats="0" applyFontFormats="0" applyPatternFormats="0" applyAlignmentFormats="0" applyWidthHeightFormats="1" dataCaption="Valores" updatedVersion="6" minRefreshableVersion="3" useAutoFormatting="1" itemPrintTitles="1" createdVersion="6" indent="0" outline="1" outlineData="1" rowHeaderCaption="rua">' +
+      '<location ref="A1:B' + (K + 2) + '" firstHeaderRow="1" firstDataRow="1" firstDataCol="1"/><pivotFields count="4"><pivotField dataField="1" showAll="0"/><pivotField showAll="0"/>' +
+      '<pivotField axis="axisRow" showAll="0"><items count="' + (K + 1) + '">' + unicas.map(function (_, k) { return '<item x="' + k + '"/>'; }).join('') + '<item t="default"/></items></pivotField><pivotField showAll="0"/></pivotFields>' +
+      '<rowFields count="1"><field x="2"/></rowFields><rowItems count="' + (K + 1) + '">' + unicas.map(function (_, k) { return k ? '<i><x v="' + k + '"/></i>' : '<i><x/></i>'; }).join('') + '<i t="grand"><x/></i></rowItems>' +
+      '<colItems count="1"><i/></colItems><dataFields count="1"><dataField name="COUNTA of SKU" fld="0" subtotal="count" baseField="0" baseItem="0"/></dataFields>' +
+      '<pivotTableStyleInfo name="PivotStyleLight16" showRowHeaders="1" showColHeaders="1" showRowStripes="0" showColStripes="0" showLastColumn="1"/></pivotTableDefinition>';
+    var linPiv = unicas.map(function (u, k) { var ns = loteDaRua[u] || []; return [u, String(cont[k]), { f: 'IFERROR(VLOOKUP(A' + (k + 2) + ',procv!$C:$D,2,FALSE),"")', v: ns.length ? 'Lote ' + ns[0] : '' }]; });
+    linPiv.push(['Grand Total', String(N), '']);
+    var cf = '<conditionalFormatting sqref="A2:C' + (K + 1) + '">' + CORES_LOTE.map(function (_, c) {
+      return '<cfRule type="expression" dxfId="' + c + '" priority="' + (c + 1) + '"><formula>AND($C2&lt;&gt;"",MOD(VALUE(SUBSTITUTE($C2,"Lote ",""))-1,' + CORES_LOTE.length + ')=' + c + ')</formula></cfRule>';
+    }).join('') + '</conditionalFormatting>';
+    var abaPivot = { nome: 'Tabela dinâmica', cab: ['rua', 'COUNTA of SKU', 'Lote'], linhas: linPiv, pivot: { definicao: definicao, registros: registros, tabela: tabela },
+      op: { semFiltro: true, cf: cf, estilo: function (k) { return k === K ? 9 : 0; } } };
     var resumoLotes = { nome: 'Lotes', cab: ['Lote', 'Área', 'SKUs', 'Ruas', 'Dentro da faixa?'], linhas: lotes.map(function (l) {
       return ['Lote ' + l.n, l.area, String(l.total), l.pedacos.map(function (p) { return p.rua + (p.parte ? ' (parte ' + p.parte + ')' : ''); }).join(', '), l.ok ? 'Sim' : (l.total < min ? 'Abaixo de ' + min : 'Acima de ' + max)];
-    }), op: { semFiltro: true, estilo: function (i) { return 2 + i % CORES_LOTE.length; } } };
-    var abasLote = lotes.map(function (l) {
-      var its = []; l.pedacos.forEach(function (p) { its = its.concat(p.itens); });
-      return { nome: nomeAba(l), cab: ['SKU', 'location', 'rua'], linhas: its.map(function (x) { return [x.sku, x.loc, x.rua]; }) };
-    });
+    }), op: { semFiltro: true, estilo: function (k) { return 2 + k % CORES_LOTE.length; } } };
     aviso('Gerando a planilha…', 85);
-    var blob = await gerarXLSX([resumoLotes, abaRuas].concat(abasLote, [
-      { nome: 'Sem posição', cab: ['SKU', 'Task ID', 'Caixa (ASN)'], linhas: semPos.map(function (x) { return [x.sku, x.task, x.cx]; }) },
-      { nome: 'Unificado', cab: cab, linhas: linhas }]));
+    var blob = await gerarXLSX([abaPivot, resumoLotes,
+      { nome: 'procv', cab: ['SKU', 'location', 'rua', 'lote'], linhas: procv },
+      { nome: 'Unificado', cab: cab, linhas: linhas }]);
     var hoje = new Date(), dd = String(hoje.getDate()).padStart(2, '0'), mm = String(hoje.getMonth() + 1).padStart(2, '0');
     return { blob: blob, nome: 'Gestão Cubagem PE ' + dd + '-' + mm + ' BACKLOG.xlsx', total: linhas.length, comPos: linhas.length - semPos.length, semPos: semPos.length, lotes: lotes, ruas: ruas.length };
   }
