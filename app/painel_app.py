@@ -19,7 +19,7 @@ import urllib.parse
 import urllib.request
 import base64
 
-VERSAO = "1.0.0"
+VERSAO = "1.1.0"
 PORTA = int(os.environ.get("PAINEL_PORTA", "9333"))
 WMS_URL = os.environ.get("PAINEL_WMS_URL", "https://wms.ssc.shopee.com.br/")
 WMS_HOST = urllib.parse.urlparse(WMS_URL).hostname
@@ -232,17 +232,23 @@ INJETAR = ("(function(){try{if(window.top!==window||location.hostname!==%s)retur
 # Roda dentro da aba do Cubiscan: acha o token da página e pede o backlog (mesma chamada que a página faz).
 CUBISCAN_JS = r"""(async function(whs){
   if (document.readyState !== 'complete') return JSON.stringify({pronto:false});
-  if (location.hostname !== __HOST__) return JSON.stringify({login:true, url: location.href});
+  if (location.hostname !== __HOST__) {
+    // Passagem pelo Google (redirecionamento) é normal; só é login de verdade se a tela pede e-mail/senha.
+    var pedeLogin = /accounts\.google\./.test(location.hostname) && !!document.querySelector('input[type=email],input[type=password]');
+    return JSON.stringify({login: pedeLogin, pronto:false, info:'em ' + location.hostname});
+  }
   var html = document.documentElement.innerHTML, achados = [], m, res = [
     /token["']?\s*[:=,]\s*["']([A-Za-z0-9_\-:]{20,90})["']/g, /["'](AM[A-Za-z0-9_\-]{8,}:\d{10,})["']/g, /["'](A[A-Za-z0-9_\-]{30,50})["']/g];
   res.forEach(function(re){ while ((m = re.exec(html))) if (achados.indexOf(m[1]) < 0) achados.push(m[1]); });
-  if (!achados.length) return JSON.stringify({pronto:false});
+  if (!achados.length) return JSON.stringify({pronto:false, info:'página sem token ainda'});
+  var status = [];
   var base = location.pathname.replace(/\/(exec|dev)$/, '/callback');
   var corpo = 'request=' + encodeURIComponent(JSON.stringify(['getCubbingItemsClient', JSON.stringify([{nb:'backlog', whs:whs}]), null, [0], null, null, 1, 0]));
   for (var i = 0; i < Math.min(achados.length, 40); i++) {
     try {
       var r = await fetch(base + '?nocache_id=' + (Date.now() % 100000) + '&token=' + encodeURIComponent(achados[i]), {method:'POST', credentials:'include', body:corpo,
         headers:{'content-type':'application/x-www-form-urlencoded;charset=UTF-8','x-same-domain':'1'}});
+      status.push(r.status);
       if (!r.ok) continue;
       var t = await r.text(); t = t.slice(t.indexOf('\n') + 1);
       var j = JSON.parse(t), bruto = j && j[0] && j[0][1] && j[0][1][1];
@@ -251,7 +257,7 @@ CUBISCAN_JS = r"""(async function(whs){
       if (d && d.rows) return JSON.stringify({ok:true, rows:d.rows, lastUpdate:d.lastUpdate || ''});
     } catch (e) {}
   }
-  return JSON.stringify({falhou:true});
+  return JSON.stringify({falhou:true, info:'tokens=' + achados.length + ' status=' + status.slice(0, 8).join(',')});
 })(__WHS__)"""
 
 
@@ -335,23 +341,28 @@ class App:
         manter_aberta = False
         try:
             s = self.nav.cmd("Target.attachToTarget", {"targetId": tid, "flatten": True})["sessionId"]
-            fim = time.time() + 90
+            codigo = CUBISCAN_JS.replace('__WHS__', json.dumps(whs)).replace('__HOST__', json.dumps(urllib.parse.urlparse(CUB_URL).hostname))
+            fim, logins, ultimo = time.time() + 120, 0, "página ainda carregando"
             while time.time() < fim:
                 time.sleep(1.5)
                 try:
-                    r = json.loads(self.nav.js(s, CUBISCAN_JS.replace('__WHS__', json.dumps(whs)).replace('__HOST__', json.dumps(urllib.parse.urlparse(CUB_URL).hostname)), timeout=60) or "{}")
-                except Exception:
+                    r = json.loads(self.nav.js(s, codigo, timeout=60) or "{}")
+                except Exception as e:
+                    ultimo = f"página carregando ({str(e)[:80]})"
                     continue
                 if r.get("ok"):
                     log(f"Cubiscan: {len(r['rows'])} linhas recebidas.")
                     return {"rows": r["rows"], "lastUpdate": r.get("lastUpdate", "")}
-                if r.get("login"):
+                # Só pede login se ficar parado na tela de login do Google (~7s); passagem rápida é normal.
+                logins = logins + 1 if r.get("login") else 0
+                if logins >= 5:
                     manter_aberta = True
                     self.nav.cmd("Target.activateTarget", {"targetId": tid})
                     raise RuntimeError("Faça login na sua conta Google da Shopee na aba que abriu e clique de novo em Montar lotes.")
-                if r.get("falhou"):
-                    raise RuntimeError("O Cubiscan não respondeu. Tente de novo em instantes.")
-            raise RuntimeError("O Cubiscan demorou demais para carregar.")
+                if r.get("info") and r.get("info") != ultimo:
+                    ultimo = r["info"]
+                    log(f"Cubiscan: {ultimo}")
+            raise RuntimeError(f"O Cubiscan não respondeu a tempo ({ultimo}). Me mande o arquivo painel.log para eu ver.")
         finally:
             if not manter_aberta:
                 try:
