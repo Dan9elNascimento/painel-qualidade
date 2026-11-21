@@ -2,7 +2,7 @@
    Tudo roda no navegador de quem clicou, com o login dessa pessoa. Nenhum dado sai do PC. */
 (function () {
   'use strict';
-  var VERSAO = '1.7.2';
+  var VERSAO = '1.8.0';
   var ID = 'painel-qualidade-raiz';
   var ZONAS_PADRAO = ['AV', 'D', 'DEM', 'EXZO', 'MI', 'MO', 'OS', 'RO', 'TS', 'RTS'];
 
@@ -536,6 +536,7 @@
       '<button class="mi on" data-v="onhand">📦 On-Hand</button>' +
       '<button class="mi" data-v="cub">📏 Cubiscan</button>' +
       '<button class="mi" data-v="rt">🔁 Rack Transfer</button>' +
+      '<button class="mi" data-v="start">🌅 Start do turno</button>' +
       '<button class="mi" disabled title="Em breve">🔜 Próxima automação</button>' +
       '<div class="sec">Sistema</div><button class="mi" data-v="config">🛠️ Configurações</button>' +
       '<div class="rod">v' + VERSAO + (temApp ? ' · app conectado ✓' : '') + ' · roda com o seu login<button class="voltar" id="fechar">— Minimizar</button></div>' +
@@ -565,6 +566,22 @@
           '<button class="go" id="rgo">🔁 Ajustar tudo</button></div>' +
         '<div class="kpis"><div class="k"><b id="r1">—</b><span>SKUs na lista</span></div><div class="k"><b id="r2">—</b><span>ajustados para 1</span></div><div class="k"><b id="r3">—</b><span>com aviso</span></div><div class="k d"><b id="r4">—</b><span>removidos</span></div></div>' +
         '<label class="ck" style="margin-top:14px"><input type="checkbox" id="rremover" checked> Remover os SKUs com “More than Suggested Pick Qty”</label>' +
+      '</section>' +
+      '<section class="view" id="v-start"><h1>Start do turno</h1><p class="sub">Monta a mensagem do Start com a data de hoje e o backlog do EOS Returns From Buyer. Complete HCs e folgas e copie.</p>' +
+        '<div class="grid" style="margin-top:0">' +
+          '<div class="card"><h3>⚙️ Dados</h3>' +
+            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div><label>Turno</label><select id="sTurno" style="width:100%;border:1px solid #e5e7eb;border-radius:8px;padding:8px"><option>T1</option><option>T2</option><option>T3</option></select></div>' +
+            '<div><label>Data</label><input id="sData" style="width:100%;border:1px solid #e5e7eb;border-radius:8px;padding:8px"></div></div>' +
+            '<label>Backlog de Returns (soma dos saldos das LHs)</label><div style="display:flex;gap:8px"><input id="sBack" type="number" style="flex:1;border:1px solid #e5e7eb;border-radius:8px;padding:8px;font-size:16px;font-weight:700"><button class="btn l" id="sPuxar">📥 Puxar do EOS</button></div>' +
+            '<div id="sLhs" style="font-size:12px;color:#6b7280;margin-top:6px;max-height:120px;overflow:auto"></div>' +
+            '<label>HCs (opcional)</label><input id="sHcs" placeholder="Ex.: Wemesson, Daniel P." style="width:100%;border:1px solid #e5e7eb;border-radius:8px;padding:8px">' +
+            '<label>Folga DSR (opcional)</label><input id="sFolga" placeholder="Ex.: Amanda, Marcos" style="width:100%;border:1px solid #e5e7eb;border-radius:8px;padding:8px">' +
+            '<details style="margin-top:12px"><summary style="cursor:pointer;font-size:12px;color:#6b7280">✏️ Editar o modelo da mensagem</summary><textarea id="sModelo" style="height:260px;margin-top:8px"></textarea>' +
+            '<div style="font-size:11px;color:#6b7280;margin-top:4px">Use {saudacao} {turno} {data} {hcs} {folga} {backlog}</div><button class="btn" id="sPadrao" style="margin-top:6px">Voltar ao modelo padrão</button></details>' +
+          '</div>' +
+          '<div class="card"><h3>💬 Mensagem pronta</h3><textarea id="sMsg" style="height:420px;font-family:Segoe UI,Arial,sans-serif;font-size:13.5px"></textarea>' +
+            '<div style="display:flex;gap:8px;margin-top:10px"><button class="btn l" id="sCopiar" style="flex:1;padding:12px;font-size:15px">📋 Copiar mensagem</button></div><div id="sOk" class="ok" style="font-size:13px;margin-top:6px;color:#16a34a"></div></div>' +
+        '</div>' +
       '</section>' +
       '<section class="view" id="v-config"><h1>Configurações</h1><p class="sub">Ficam salvas neste navegador.</p><div class="card" style="max-width:560px">' +
         '<h3>On-Hand</h3><label>Zonas para remover (uma por linha)</label><textarea id="zonas"></textarea>' +
@@ -962,6 +979,50 @@
     } catch (e) { rAviso('❌ ' + e.message, null); log('❌ ' + e.message, 'er'); restaurar(); }
     rtRodando = false; b.textContent = '🔁 Ajustar tudo';
   };
+
+
+  /* ---------- Start do turno ---------- */
+  var EOS_URL = 'https://script.google.com/a/macros/shopee.com/s/AKfycbz5FswTU34sEJjI4ZRozlVOP5nBcJsoo6UpUlmZBPEEqiXb9TfrdQQSZswAYnRT1iwm/exec';
+  var MODELO_PADRAO = '{saudacao}!\nSegue Start de turno {turno} FPE - Qualidade - {data}\n🔹 DDSMA: \n🔹 DDQA: \n🔹 HC\'s:\n{hcs}\n🔹Folga DSR: {folga}\n🔹 Auditorias:\n🔹 Treinamento:\n🔹 RR Reclamações:\nWemesson:\n🔹 Returns:\nDaniel\nBaklog: {backlog}\n🔹 Verificação de Cubagem: \n🔹 Recursos disponíveis:\nPDA: 9\nComputadores: 5\nScaner: 7\nRádio: 2\n🔹 Observações:';
+  function hojeTxt() { var d = new Date(); return String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0') + '/' + String(d.getFullYear()).slice(2); }
+  function saudacao() { var h = new Date().getHours(); return h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite'; }
+  function turnoAgora() { var h = new Date().getHours(); return h >= 6 && h < 14 ? 'T1' : h >= 14 && h < 22 ? 'T2' : 'T3'; }
+  function montarStart() {
+    var m = cfg.startModelo || MODELO_PADRAO, v = {
+      saudacao: saudacao(), turno: $('sTurno').value, data: $('sData').value, hcs: $('sHcs').value.trim(), folga: $('sFolga').value.trim(),
+      backlog: $('sBack').value === '' ? '' : $('sBack').value };
+    $('sMsg').value = m.replace(/\{(\w+)\}/g, function (a, k) { return k in v ? v[k] : a; });
+  }
+  $('sTurno').value = cfg.startTurno || turnoAgora(); $('sData').value = hojeTxt(); $('sModelo').value = cfg.startModelo || MODELO_PADRAO;
+  ['sTurno', 'sData', 'sBack', 'sHcs', 'sFolga'].forEach(function (id) { $(id).addEventListener('input', montarStart); $(id).addEventListener('change', montarStart); });
+  $('sTurno').addEventListener('change', function () { cfg.startTurno = $('sTurno').value; salvarCfg(); });
+  $('sModelo').addEventListener('input', function () { cfg.startModelo = $('sModelo').value; salvarCfg(); montarStart(); });
+  $('sPadrao').onclick = function () { delete cfg.startModelo; salvarCfg(); $('sModelo').value = MODELO_PADRAO; montarStart(); };
+  $('sCopiar').onclick = function () {
+    var t = $('sMsg').value;
+    (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).catch(function () { $('sMsg').select(); document.execCommand('copy'); })
+      .then(function () { $('sOk').textContent = '✅ Copiado! É só colar no grupo.'; setTimeout(function () { $('sOk').textContent = ''; }, 3000); });
+  };
+  var startPuxado = false;
+  async function puxarBacklog() {
+    var b = $('sPuxar');
+    if (!temApp) { window.open(EOS_URL, '_blank'); $('sLhs').textContent = 'Pelo favorito não dá para ler o EOS daqui: veja as LHs em "Registro de Tratativas" e digite o backlog. (Com o app Painel Qualidade isso é automático.)'; return; }
+    b.disabled = true; b.textContent = '⏳ Puxando…'; $('sLhs').textContent = 'Lendo as LHs do EOS em segundo plano…';
+    try {
+      var r = await ponte('eosBacklog', {});
+      var lhs = r.lhs || [], soma = lhs.reduce(function (s2, x) { return s2 + (x.saldo || 0); }, 0), comSaldo = lhs.filter(function (x) { return x.saldo; });
+      $('sBack').value = soma; montarStart(); startPuxado = true;
+      $('sLhs').innerHTML = lhs.length ? (comSaldo.length ? comSaldo.map(function (x) { return '• ' + escH(x.lh) + ': <b>' + fmt(x.saldo) + '</b>'; }).join('<br>') : 'Todas as ' + lhs.length + ' LHs estão com saldo 0.') + '<br><small>Atualizado às ' + new Date().toLocaleTimeString('pt-BR').slice(0, 5) + '</small>' : 'Nenhuma LH na lista.';
+      log('🌅 Start: backlog ' + soma + ' (' + lhs.length + ' LHs, ' + comSaldo.length + ' com saldo).', 'ok');
+    } catch (e) {
+      var msg = /desconhecida/i.test(e.message) ? 'Seu app está desatualizado: baixe o PainelQualidade.exe de novo em dpaixao.site/qualidade.' : e.message;
+      $('sLhs').textContent = '❌ ' + msg; log('❌ Start: ' + msg, 'er');
+    }
+    b.disabled = false; b.textContent = '📥 Puxar do EOS';
+  }
+  $('sPuxar').onclick = puxarBacklog;
+  raiz.querySelector('.mi[data-v=start]').addEventListener('click', function () { $('sData').value = hojeTxt(); montarStart(); if (temApp && !startPuxado) puxarBacklog(); });
+  montarStart();
 
   function preencherCfg() { $('zonas').value = cfg.zonas.join('\n'); $('dup').checked = !!cfg.dup; $('zres').innerHTML = cfg.zonas.map(function (z) { return '<div class="zr"><b>—</b>' + escH(z) + '</div>'; }).join(''); }
   $('salvar').onclick = function () {

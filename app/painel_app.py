@@ -19,11 +19,12 @@ import urllib.parse
 import urllib.request
 import base64
 
-VERSAO = "1.3.0"
+VERSAO = "1.4.0"
 PORTA = int(os.environ.get("PAINEL_PORTA", "9333"))
 WMS_URL = os.environ.get("PAINEL_WMS_URL", "https://wms.ssc.shopee.com.br/")
 WMS_HOST = urllib.parse.urlparse(WMS_URL).hostname
 PAINEL_JS = os.environ.get("PAINEL_JS_URL", "https://dan9elnascimento.github.io/painel-qualidade/painel.js")
+EOS_URL = os.environ.get("PAINEL_EOS_URL", "https://script.google.com/a/macros/shopee.com/s/AKfycbz5FswTU34sEJjI4ZRozlVOP5nBcJsoo6UpUlmZBPEEqiXb9TfrdQQSZswAYnRT1iwm/exec")
 CUB_URL = os.environ.get("PAINEL_CUB_URL", "https://script.google.com/a/shopee.com/macros/s/AKfycbzfv3G8biAdsTp5DMWptXOwDgrMFwCCbAb50LQ72Hogbvj0A1wXpQB1uzYbN5M1gTEk/exec?page=cubscan")
 BASE = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "PainelQualidade")
 PERFIL = os.path.join(BASE, "perfil")
@@ -251,6 +252,22 @@ CUBISCAN_IFRAME_JS = r"""(async function(whs){
   return JSON.stringify({falhou:true, info:'Cubiscan respondeu sem linhas: ' + JSON.stringify(Object.keys(d || {})).slice(0, 150)});
 })(__WHS__)"""
 
+# Lê a lista "LH recebida" (com o saldo) do app EOS Returns From Buyer — só leitura.
+EOS_JS = r"""(function(){
+  function docs(w, n, out) { try { if (w.document) out.push(w.document); } catch (e) {} if (n > 3) return out;
+    for (var i = 0; i < w.frames.length; i++) { try { docs(w.frames[i], n + 1, out); } catch (e) {} } return out; }
+  var ds = docs(window, 0, []), ops = [];
+  ds.forEach(function (d) { [].forEach.call(d.querySelectorAll('option'), function (o) { if (/saldo\s*:/i.test(o.textContent)) ops.push(o.textContent.replace(/\s+/g, ' ').trim()); }); });
+  if (!ops.length) {
+    // abre a aba "Registro de Tratativas" (onde fica a lista de LH) e espera carregar
+    ds.forEach(function (d) { var b = [].filter.call(d.querySelectorAll('button,a,li,div,span'), function (e) { return /registro de tratativas/i.test(e.textContent || '') && e.children.length < 3; })[0]; if (b) b.click(); });
+    var temSelect = ds.some(function (d) { return d.querySelector('select'); });
+    return JSON.stringify({pronto:false, info: temSelect ? 'lista de LH carregando' : 'app do EOS carregando'});
+  }
+  var lhs = ops.map(function (t) { var m = t.match(/^(\S+).*?saldo\s*:\s*(-?[\d.,]+)/i); return m ? {lh: m[1], saldo: Number(m[2].replace(/\./g, '').replace(',', '.')), texto: t} : null; }).filter(Boolean);
+  return JSON.stringify({ok:true, lhs: lhs});
+})()"""
+
 # Plano B: roda na página do Cubiscan: acha o token da página e pede o backlog (mesma chamada que a página faz).
 CUBISCAN_JS = r"""(async function(whs){
   if (document.readyState !== 'complete') return JSON.stringify({pronto:false});
@@ -363,12 +380,62 @@ class App:
         try:
             if acao == "ping":
                 return self.responder(sessao, pid, True, {"versao": VERSAO})
+            if acao == "eosBacklog":
+                return self.responder(sessao, pid, True, self.eos_backlog())
             if acao == "cubiscan":
                 return self.responder(sessao, pid, True, self.cubiscan(pedido.get("whs") or "BRFPE1"))
             raise RuntimeError("Ação desconhecida: " + str(acao))
         except Exception as e:
             log(f"Erro em {acao}: {e}")
             self.responder(sessao, pid, False, {"erro": str(e)})
+
+    def eos_backlog(self):
+        """Abre o EOS Returns From Buyer em segundo plano e lê as LHs com saldo (não altera nada)."""
+        log("EOS: abrindo em segundo plano…")
+        tid = self.nav.cmd("Target.createTarget", {"url": EOS_URL, "background": True})["targetId"]
+        self.ajudantes.add(tid)
+        manter, s = False, None
+        try:
+            s = self.nav.cmd("Target.attachToTarget", {"targetId": tid, "flatten": True})["sessionId"]
+            for metodo, params in (("Page.enable", {}), ("Page.setWebLifecycleState", {"state": "active"}),
+                                   ("Emulation.setFocusEmulationEnabled", {"enabled": True}),
+                                   ("Target.setAutoAttach", {"autoAttach": True, "waitForDebuggerOnStart": False, "flatten": True})):
+                try:
+                    self.nav.cmd(metodo, params, s)
+                except Exception:
+                    pass
+            fim, logins, ultimo = time.time() + 90, 0, "página carregando"
+            while time.time() < fim:
+                time.sleep(1.5)
+                for sess in [s] + [x[0] for x in self.iframes.get(s, [])]:
+                    try:
+                        r = json.loads(self.nav.js(sess, EOS_JS, timeout=30) or "{}")
+                    except Exception:
+                        continue
+                    if r.get("ok"):
+                        log(f"EOS: {len(r['lhs'])} LH(s) lidas.")
+                        return {"lhs": r["lhs"]}
+                    if r.get("info"):
+                        ultimo = r["info"]
+                try:
+                    pag = self.nav.js(s, "JSON.stringify({h: location.hostname, f: !!document.querySelector('input[type=email],input[type=password]')})", timeout=10)
+                    pag = json.loads(pag or "{}")
+                except Exception:
+                    pag = {}
+                logins = logins + 1 if (pag.get("h", "").startswith("accounts.google.") and pag.get("f")) else 0
+                if logins >= 5:
+                    manter = True
+                    self.nav.cmd("Target.activateTarget", {"targetId": tid})
+                    raise RuntimeError("Faça login na sua conta Google da Shopee na aba que abriu e tente de novo.")
+            raise RuntimeError(f"O EOS não respondeu a tempo ({ultimo}).")
+        finally:
+            if not manter:
+                try:
+                    self.nav.cmd("Target.closeTarget", {"targetId": tid})
+                except Exception:
+                    pass
+            self.ajudantes.discard(tid)
+            self.iframes.pop(s, None)
 
     def cubiscan(self, whs):
         log("Cubiscan: abrindo a página em segundo plano…")
