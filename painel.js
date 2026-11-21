@@ -2,7 +2,8 @@
    Tudo roda no navegador de quem clicou, com o login dessa pessoa. Nenhum dado sai do PC. */
 (function () {
   'use strict';
-  var VERSAO = '1.8.0';
+  var VERSAO = '1.9.0';
+  var ULTIMAS = { ext: '1.0.0', app: '1.4.0' };   // versões mais novas da extensão e do app (aviso de atualização)
   var ID = 'painel-qualidade-raiz';
   var ZONAS_PADRAO = ['AV', 'D', 'DEM', 'EXZO', 'MI', 'MO', 'OS', 'RO', 'TS', 'RTS'];
 
@@ -539,7 +540,7 @@
       '<button class="mi" data-v="start">🌅 Start do turno</button>' +
       '<button class="mi" disabled title="Em breve">🔜 Próxima automação</button>' +
       '<div class="sec">Sistema</div><button class="mi" data-v="config">🛠️ Configurações</button>' +
-      '<div class="rod">v' + VERSAO + (temApp ? ' · app conectado ✓' : '') + ' · roda com o seu login<button class="voltar" id="fechar">— Minimizar</button></div>' +
+      '<div class="rod">v' + VERSAO + (temApp ? (String(window.__painelApp).indexOf('ext-') === 0 ? ' · extensão ✓' : ' · app ✓') : '') + ' · roda com o seu login<button class="voltar" id="fechar">— Minimizar</button></div>' +
     '</aside><main>' +
       '<section class="view on" id="v-onhand"><h1>On-Hand Inventory Map</h1><p class="sub">Baixa do WMS, junta as planilhas, remove as zonas da lista e entrega a planilha pronta.</p>' +
         '<div class="hero"><div class="txt"><h2>📥 Baixar On-Hand agora</h2><p>Um clique: o painel pede a exportação ao WMS, espera ficar pronta, junta tudo e baixa a planilha limpa. Pode levar alguns minutos — dá pra continuar usando o PC.</p>' +
@@ -659,6 +660,17 @@
   window.addEventListener('resize', function () { if (modo === 'janela') aplicar(); });
   window.__painelQualidade = { alternar: function () { minimizado ? restaurar() : minimizar(); } };
   if (window.__painelApp) minimizado = true;
+  (function avisoAtualizacao() {   // extensão/app mais antigo que o atual → aviso com link
+    var v = String(window.__painelApp || ''); if (!v) return;
+    var tipo = v.indexOf('ext-') === 0 ? 'ext' : 'app', atual = v.replace(/^ext-/, '');
+    function menor(a, b) { a = a.split('.').map(Number); b = b.split('.').map(Number); for (var i = 0; i < 3; i++) { if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) < (b[i] || 0); } return false; }
+    if (!menor(atual, ULTIMAS[tipo])) return;
+    var d = document.createElement('div');
+    d.style.cssText = 'margin:8px 0 0;background:#EE4D2D;color:#fff;border-radius:8px;padding:8px;font-size:12px;line-height:1.4';
+    d.innerHTML = '⚠️ Tem ' + (tipo === 'ext' ? 'atualização da extensão' : 'versão nova do app') + ' (' + ULTIMAS[tipo] + '). <a href="https://dpaixao.site/qualidade" target="_blank" style="color:#fff;font-weight:700">Baixar</a>';
+    raiz.querySelector('.rod').appendChild(d);
+    $('pilSt').textContent = '· atualização disponível';
+  })();
   aplicar();
 
 

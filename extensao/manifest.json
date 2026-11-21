@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Painel Qualidade",
+  "version": "1.0.0",
+  "description": "Painel de automações do WMS do time de qualidade (On-Hand, Cubiscan, Rack Transfer, Start do turno).",
+  "icons": { "128": "icone128.png" },
+  "permissions": ["scripting", "tabs"],
+  "host_permissions": [
+    "https://wms.ssc.shopee.com.br/*",
+    "https://script.google.com/*",
+    "https://*.googleusercontent.com/*"
+  ],
+  "background": { "service_worker": "sw.js" },
+  "content_scripts": [
+    { "matches": ["https://wms.ssc.shopee.com.br/*"], "js": ["ponte_main.js"], "world": "MAIN", "run_at": "document_start" },
+    { "matches": ["https://wms.ssc.shopee.com.br/*"], "js": ["ponte_isolada.js"], "run_at": "document_start" }
+  ],
+  "action": { "default_title": "Painel Qualidade", "default_icon": { "128": "icone128.png" } }
+}

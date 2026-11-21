@@ -1,0 +1,11 @@
+PAINEL QUALIDADE - EXTENSAO DO CHROME
+
+INSTALAR (uma vez)
+1. Extraia esta pasta num lugar fixo (ex.: Documentos\PainelQualidade-extensao). Nao apague depois.
+2. No Chrome, abra chrome://extensions
+3. Ligue o "Modo do desenvolvedor" (canto de cima, a direita).
+4. Clique em "Carregar sem compactacao" e escolha esta pasta.
+5. Pronto: abra o WMS e o botao laranja do Painel aparece no canto.
+
+ATUALIZAR A EXTENSAO (raro - o painel avisa)
+Baixe de novo, substitua os arquivos desta pasta e clique em "Recarregar" (seta circular) na extensao em chrome://extensions.
