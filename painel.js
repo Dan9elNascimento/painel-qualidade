@@ -2,7 +2,7 @@
    Tudo roda no navegador de quem clicou, com o login dessa pessoa. Nenhum dado sai do PC. */
 (function () {
   'use strict';
-  var VERSAO = '1.9.0';
+  var VERSAO = '1.10.0';
   var ULTIMAS = { ext: '1.0.0', app: '1.4.0' };   // versões mais novas da extensão e do app (aviso de atualização)
   var ID = 'painel-qualidade-raiz';
   var ZONAS_PADRAO = ['AV', 'D', 'DEM', 'EXZO', 'MI', 'MO', 'OS', 'RO', 'TS', 'RTS'];
@@ -20,7 +20,7 @@
 
   /* ===================== CONFIG (por pessoa, neste navegador) ===================== */
   var CHAVE = 'painelQualidade_cfg';
-  var cfg = { zonas: ZONAS_PADRAO.slice(), dup: true, cubMin: 150, cubMax: 230 };
+  var cfg = { zonas: ZONAS_PADRAO.slice(), dup: true, cubMin: 150, cubMax: 230, ohLotes: true, ohMax: 230 };
   try { var salvo = JSON.parse(localStorage.getItem(CHAVE) || 'null'); if (salvo) for (var k in salvo) cfg[k] = salvo[k]; } catch (e) {}
   function salvarCfg() { try { localStorage.setItem(CHAVE, JSON.stringify(cfg)); } catch (e) {} }
 
@@ -276,6 +276,93 @@
   }
   var ONHAND = { export_module: 3, task_type: 86, extra_data: JSON.stringify({ timeRange: 1, module: 3, taskType: 86, include_batch: 'N', export_angle: 1 }) };
 
+  /* Tabela dinâmica de verdade (Lote > rua, COUNTA de SKU) a partir das linhas [SKU, location, rua, lote, ...] */
+  function abaPivotLotes(procv, fonte) {
+    // Tabela dinâmica de verdade: linhas = Lote > rua, valores = COUNTA de SKU.
+    // 2 cliques no total do lote abre TODOS os SKUs do lote (todas as ruas juntas); na rua, só a rua.
+    function ordem(a, b) { return a === b ? 0 : a < b ? -1 : 1; }
+    var ruasU = Object.keys(procv.reduce(function (o, r) { o[r[2]] = 1; return o; }, {})).sort(ordem);
+    var lotesU = Object.keys(procv.reduce(function (o, r) { o[r[3]] = 1; return o; }, {})).sort(ordem);
+    var iRua = {}, iLote = {}; ruasU.forEach(function (u, k) { iRua[u] = k; }); lotesU.forEach(function (u, k) { iLote[u] = k; });
+    var porLote = {}, porLoteRua = {};
+    procv.forEach(function (r) { porLote[r[3]] = (porLote[r[3]] || 0) + 1; var k = r[3] + '\u0001' + r[2]; porLoteRua[k] = (porLoteRua[k] || 0) + 1; });
+    var N = procv.length, esc = function (v) { return escX(v).replace(/"/g, '&quot;'); };
+    var definicao = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId1" refreshOnLoad="1" createdVersion="6" refreshedVersion="6" minRefreshableVersion="3" recordCount="' + N + '">' +
+      '<cacheSource type="worksheet"><worksheetSource ref="A1:D' + (N + 1) + '" sheet="' + fonte + '"/></cacheSource><cacheFields count="4">' +
+      '<cacheField name="SKU" numFmtId="0"><sharedItems/></cacheField><cacheField name="location" numFmtId="0"><sharedItems containsBlank="1"/></cacheField>' +
+      '<cacheField name="rua" numFmtId="0"><sharedItems containsBlank="1" count="' + ruasU.length + '">' + ruasU.map(function (u) { return u ? '<s v="' + esc(u) + '"/>' : '<m/>'; }).join('') + '</sharedItems></cacheField>' +
+      '<cacheField name="lote" numFmtId="0"><sharedItems count="' + lotesU.length + '">' + lotesU.map(function (u) { return '<s v="' + esc(u) + '"/>'; }).join('') + '</sharedItems></cacheField></cacheFields></pivotCacheDefinition>';
+    var q = function (v) { return v ? '<s v="' + esc(v) + '"/>' : '<m/>'; };
+    var registros = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?><pivotCacheRecords xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" count="' + N + '">'];
+    procv.forEach(function (r) { registros.push('<r>' + q(r[0]) + q(r[1]) + '<x v="' + iRua[r[2]] + '"/><x v="' + iLote[r[3]] + '"/></r>'); });
+    registros.push('</pivotCacheRecords>');
+    var x = function (v) { return v ? '<x v="' + v + '"/>' : '<x/>'; };
+    var itensLinha = [], linPiv = [], tipoLinha = [];
+    lotesU.forEach(function (lt) {
+      itensLinha.push('<i>' + x(iLote[lt]) + '</i>'); linPiv.push([lt, String(porLote[lt]), lt]); tipoLinha.push('lote');
+      ruasU.filter(function (ru) { return porLoteRua[lt + '\u0001' + ru]; }).forEach(function (ru) {
+        itensLinha.push('<i r="1">' + x(iRua[ru]) + '</i>'); linPiv.push([ru || '(vazio)', String(porLoteRua[lt + '\u0001' + ru]), lt]); tipoLinha.push('rua');
+      });
+    });
+    itensLinha.push('<i t="grand"><x/></i>'); linPiv.push(['Grand Total', String(N), '']); tipoLinha.push('total');
+    var L = linPiv.length;
+    var tabela = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="TabelaDinamica1" cacheId="1" applyNumberFormats="0" applyBorderFormats="0" applyFontFormats="0" applyPatternFormats="0" applyAlignmentFormats="0" applyWidthHeightFormats="1" dataCaption="Valores" updatedVersion="6" minRefreshableVersion="3" useAutoFormatting="1" itemPrintTitles="1" createdVersion="6" indent="2" outline="1" outlineData="1" rowHeaderCaption="Lote / rua">' +
+      '<location ref="A1:B' + (L + 1) + '" firstHeaderRow="1" firstDataRow="1" firstDataCol="1"/><pivotFields count="4"><pivotField dataField="1" showAll="0"/><pivotField showAll="0"/>' +
+      '<pivotField axis="axisRow" showAll="0"><items count="' + (ruasU.length + 1) + '">' + ruasU.map(function (_, k) { return '<item x="' + k + '"/>'; }).join('') + '<item t="default"/></items></pivotField>' +
+      '<pivotField axis="axisRow" showAll="0"><items count="' + (lotesU.length + 1) + '">' + lotesU.map(function (_, k) { return '<item x="' + k + '"/>'; }).join('') + '<item t="default"/></items></pivotField></pivotFields>' +
+      '<rowFields count="2"><field x="3"/><field x="2"/></rowFields><rowItems count="' + itensLinha.length + '">' + itensLinha.join('') + '</rowItems>' +
+      '<colItems count="1"><i/></colItems><dataFields count="1"><dataField name="COUNTA of SKU" fld="0" subtotal="count" baseField="0" baseItem="0"/></dataFields>' +
+      '<pivotTableStyleInfo name="PivotStyleLight16" showRowHeaders="1" showColHeaders="1" showRowStripes="0" showColStripes="0" showLastColumn="1"/></pivotTableDefinition>';
+    var cf = '<conditionalFormatting sqref="A2:C' + L + '">' + CORES_LOTE.map(function (_, c) {
+      return '<cfRule type="expression" dxfId="' + c + '" priority="' + (c + 1) + '"><formula>AND(LEFT($C2,5)="Lote ",MOD(VALUE(MID($C2,6,3))-1,' + CORES_LOTE.length + ')=' + c + ')</formula></cfRule>';
+    }).join('') + '</conditionalFormatting>';
+    var abaPivot = { nome: 'Tabela dinâmica', cab: ['Lote / rua', 'COUNTA of SKU', 'Lote'], linhas: linPiv, pivot: { definicao: definicao, registros: registros, tabela: tabela },
+      op: { semFiltro: true, cf: cf, estilo: function (k) { return tipoLinha[k] === 'total' ? 9 : tipoLinha[k] === 'lote' ? 8 : 0; } } };
+    return abaPivot;
+  }
+
+
+  /* On-Hand -> lotes para Rack Transfer: 1 linha por SKU (posição com mais estoque), separado por zona, até `max` por lote */
+  function lotesOnHand(cab, linhas, max) {
+    function col(re) { for (var i = 0; i < cab.length; i++) if (re.test(cab[i])) return i; return -1; }
+    var iSku = col(/^sku\s*id$/i); if (iSku < 0) iSku = col(/^sku/i);
+    var iLoc = col(/^location$/i); if (iLoc < 0) iLoc = col(/location|local/i);
+    var iZona = col(/^zone/i); if (iZona < 0) iZona = col(/zone|zona/i);
+    var iQtd = col(/^available\s*qty$/i); if (iQtd < 0) iQtd = col(/on-?hand\s*qty/i);
+    var iNome = col(/sku\s*name/i);
+    if (iSku < 0 || iLoc < 0) throw new Error('Não achei as colunas SKU ID e Location no On-Hand.');
+    // 1 linha por SKU: fica a posição com mais estoque disponível
+    var melhor = {}, repetidos = 0;
+    linhas.forEach(function (l) {
+      var sku = String(l[iSku] || '').trim(), loc = String(l[iLoc] || '').trim(); if (!sku || !loc) return;
+      var q = iQtd >= 0 ? Number(l[iQtd]) || 0 : 0, atual = melhor[sku];
+      if (atual) { repetidos++; if (q <= atual.q) return; }
+      melhor[sku] = { sku: sku, loc: loc, q: q, zona: iZona >= 0 ? String(l[iZona] || '').trim().toUpperCase() : areaDe(ruaDe(loc)), nome: iNome >= 0 ? l[iNome] : '' };
+    });
+    function chave(t) { return String(t).toUpperCase().replace(/\d+/g, function (n) { return ('000000' + n).slice(-7); }); }
+    var porZona = {};
+    Object.keys(melhor).forEach(function (k) { var x = melhor[k]; x.k = chave(x.loc); (porZona[x.zona] = porZona[x.zona] || []).push(x); });
+    var zonas = Object.keys(porZona).sort(function (a, b) { var A = chave(a), B = chave(b); return A < B ? -1 : A > B ? 1 : 0; });
+    var lotes = [];
+    zonas.forEach(function (z) {
+      var its = porZona[z].sort(function (a, b) { return a.k < b.k ? -1 : a.k > b.k ? 1 : 0; });
+      var k = Math.max(1, Math.ceil(its.length / max)), tam = Math.ceil(its.length / k);   // lotes do mesmo tamanho (até `max`)
+      for (var i = 0; i < its.length; i += tam) lotes.push({ zona: z, itens: its.slice(i, i + tam) });
+    });
+    var larg = Math.max(2, String(lotes.length).length);
+    function nomeL(n) { return 'Lote ' + String(n).padStart(larg, '0'); }
+    var itens = [];
+    lotes.forEach(function (l, n) {
+      l.nome = nomeL(n + 1);
+      l.itens.forEach(function (x) { itens.push([x.sku, x.loc, ruaDe(x.loc), l.nome, x.zona, String(x.q), x.nome == null ? '' : String(x.nome)]); });
+    });
+    var abaLotes = { nome: 'Lotes', cab: ['Lote', 'Zona', 'SKUs', 'Da location', 'Até a location', 'Ruas'], linhas: lotes.map(function (l) {
+      var ruas = []; l.itens.forEach(function (x) { var r = ruaDe(x.loc); if (ruas[ruas.length - 1] !== r) ruas.push(r); });
+      return [l.nome, l.zona, String(l.itens.length), l.itens[0].loc, l.itens[l.itens.length - 1].loc, ruas.length > 6 ? ruas[0] + ' … ' + ruas[ruas.length - 1] + ' (' + ruas.length + ' ruas)' : ruas.join(', ')];
+    }), op: { semFiltro: false, estilo: function (k) { return 2 + k % CORES_LOTE.length; } } };
+    return { cab: ['SKU', 'location', 'rua', 'lote', 'zona', 'qtd disponível', 'SKU Name'], itens: itens, lotes: lotes, abaLotes: abaLotes, repetidos: repetidos };
+  }
+
   async function processarOnHand(arqsBrutos, aviso) {
     var arqs = [];
     for (var i = 0; i < arqsBrutos.length; i++) {
@@ -297,8 +384,23 @@
       ['Linhas na planilha', f.linhas.length], ['Coluna usada no filtro', f.coluna], ['', ''], ['Zona removida', 'Linhas']]
       .concat(cfg.zonas.map(function (z) { z = z.trim().toUpperCase(); return [z, f.porZona[z] || 0]; }))
       .concat([['', ''], ['Arquivos usados', '']], arqs.map(function (a) { return [a.nome, a.linhas.length]; }));
-    var blob = await gerarXLSX([{ nome: 'On-Hand', cab: u.cab, linhas: f.linhas }, { nome: 'Resumo', cab: ['Item', 'Valor'], linhas: resumo.map(function (r) { return r.map(String); }) }]);
-    return { blob: blob, nome: 'OnHand_unificado_' + carimbo() + '.xlsx', lidas: lidas, dup: u.dup, porZona: f.porZona, final: f.linhas.length, arquivos: arqs.length, coluna: f.coluna };
+    var abas = [{ nome: 'On-Hand', cab: u.cab, linhas: f.linhas }, { nome: 'Resumo', cab: ['Item', 'Valor'], linhas: resumo.map(function (r) { return r.map(String); }) }];
+    var infoLotes = null;
+    if (cfg.ohLotes) {
+      aviso('Separando em lotes para Rack Transfer…', 84); await esperar(30);
+      infoLotes = lotesOnHand(u.cab, f.linhas, +cfg.ohMax || 230);
+      resumo.push(['', ''], ['Lotes Rack Transfer', infoLotes.lotes.length], ['SKUs únicos nos lotes', infoLotes.itens.length], ['SKUs repetidos tirados', infoLotes.repetidos]);
+      abas[1].linhas = resumo.map(function (r) { return r.map(String); });
+    }
+    aviso('Gerando a planilha…', 88);
+    var blob = await gerarXLSX(abas), blobLotes = null;
+    if (infoLotes) {   // arquivo separado, leve, só com os lotes (abre rápido no Google Sheets)
+      aviso('Gerando a planilha dos lotes…', 94);
+      blobLotes = await gerarXLSX([abaPivotLotes(infoLotes.itens, 'Itens Rack Transfer'), infoLotes.abaLotes,
+        { nome: 'Itens Rack Transfer', cab: infoLotes.cab, linhas: infoLotes.itens }]);
+    }
+    var hj = new Date();
+    return { blob: blob, blobLotes: blobLotes, nomeLotes: 'Rack Transfer Lotes PE ' + String(hj.getDate()).padStart(2, '0') + '-' + String(hj.getMonth() + 1).padStart(2, '0') + '.xlsx', nome: 'OnHand_unificado_' + carimbo() + '.xlsx', lotes: infoLotes ? infoLotes.lotes.length : 0, unicos: infoLotes ? infoLotes.itens.length : 0, lidas: lidas, dup: u.dup, porZona: f.porZona, final: f.linhas.length, arquivos: arqs.length, coluna: f.coluna };
   }
 
 
@@ -447,46 +549,7 @@
       if (a[3] !== b[3]) return a[3] < b[3] ? -1 : 1;
       return ordemNatural(a[2], b[2]) || ordemNatural(a[1], b[1]);
     });
-    // Tabela dinâmica de verdade: linhas = Lote > rua, valores = COUNTA de SKU.
-    // 2 cliques no total do lote abre TODOS os SKUs do lote (todas as ruas juntas); na rua, só a rua.
-    function ordem(a, b) { return a === b ? 0 : a < b ? -1 : 1; }
-    var ruasU = Object.keys(procv.reduce(function (o, r) { o[r[2]] = 1; return o; }, {})).sort(ordem);
-    var lotesU = Object.keys(procv.reduce(function (o, r) { o[r[3]] = 1; return o; }, {})).sort(ordem);
-    var iRua = {}, iLote = {}; ruasU.forEach(function (u, k) { iRua[u] = k; }); lotesU.forEach(function (u, k) { iLote[u] = k; });
-    var porLote = {}, porLoteRua = {};
-    procv.forEach(function (r) { porLote[r[3]] = (porLote[r[3]] || 0) + 1; var k = r[3] + '\u0001' + r[2]; porLoteRua[k] = (porLoteRua[k] || 0) + 1; });
-    var N = procv.length, esc = function (v) { return escX(v).replace(/"/g, '&quot;'); };
-    var definicao = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId1" refreshOnLoad="1" createdVersion="6" refreshedVersion="6" minRefreshableVersion="3" recordCount="' + N + '">' +
-      '<cacheSource type="worksheet"><worksheetSource ref="A1:D' + (N + 1) + '" sheet="procv"/></cacheSource><cacheFields count="4">' +
-      '<cacheField name="SKU" numFmtId="0"><sharedItems/></cacheField><cacheField name="location" numFmtId="0"><sharedItems containsBlank="1"/></cacheField>' +
-      '<cacheField name="rua" numFmtId="0"><sharedItems containsBlank="1" count="' + ruasU.length + '">' + ruasU.map(function (u) { return u ? '<s v="' + esc(u) + '"/>' : '<m/>'; }).join('') + '</sharedItems></cacheField>' +
-      '<cacheField name="lote" numFmtId="0"><sharedItems count="' + lotesU.length + '">' + lotesU.map(function (u) { return '<s v="' + esc(u) + '"/>'; }).join('') + '</sharedItems></cacheField></cacheFields></pivotCacheDefinition>';
-    var q = function (v) { return v ? '<s v="' + esc(v) + '"/>' : '<m/>'; };
-    var registros = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?><pivotCacheRecords xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" count="' + N + '">'];
-    procv.forEach(function (r) { registros.push('<r>' + q(r[0]) + q(r[1]) + '<x v="' + iRua[r[2]] + '"/><x v="' + iLote[r[3]] + '"/></r>'); });
-    registros.push('</pivotCacheRecords>');
-    var x = function (v) { return v ? '<x v="' + v + '"/>' : '<x/>'; };
-    var itensLinha = [], linPiv = [], tipoLinha = [];
-    lotesU.forEach(function (lt) {
-      itensLinha.push('<i>' + x(iLote[lt]) + '</i>'); linPiv.push([lt, String(porLote[lt]), lt]); tipoLinha.push('lote');
-      ruasU.filter(function (ru) { return porLoteRua[lt + '\u0001' + ru]; }).forEach(function (ru) {
-        itensLinha.push('<i r="1">' + x(iRua[ru]) + '</i>'); linPiv.push([ru || '(vazio)', String(porLoteRua[lt + '\u0001' + ru]), lt]); tipoLinha.push('rua');
-      });
-    });
-    itensLinha.push('<i t="grand"><x/></i>'); linPiv.push(['Grand Total', String(N), '']); tipoLinha.push('total');
-    var L = linPiv.length;
-    var tabela = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="TabelaDinamica1" cacheId="1" applyNumberFormats="0" applyBorderFormats="0" applyFontFormats="0" applyPatternFormats="0" applyAlignmentFormats="0" applyWidthHeightFormats="1" dataCaption="Valores" updatedVersion="6" minRefreshableVersion="3" useAutoFormatting="1" itemPrintTitles="1" createdVersion="6" indent="2" outline="1" outlineData="1" rowHeaderCaption="Lote / rua">' +
-      '<location ref="A1:B' + (L + 1) + '" firstHeaderRow="1" firstDataRow="1" firstDataCol="1"/><pivotFields count="4"><pivotField dataField="1" showAll="0"/><pivotField showAll="0"/>' +
-      '<pivotField axis="axisRow" showAll="0"><items count="' + (ruasU.length + 1) + '">' + ruasU.map(function (_, k) { return '<item x="' + k + '"/>'; }).join('') + '<item t="default"/></items></pivotField>' +
-      '<pivotField axis="axisRow" showAll="0"><items count="' + (lotesU.length + 1) + '">' + lotesU.map(function (_, k) { return '<item x="' + k + '"/>'; }).join('') + '<item t="default"/></items></pivotField></pivotFields>' +
-      '<rowFields count="2"><field x="3"/><field x="2"/></rowFields><rowItems count="' + itensLinha.length + '">' + itensLinha.join('') + '</rowItems>' +
-      '<colItems count="1"><i/></colItems><dataFields count="1"><dataField name="COUNTA of SKU" fld="0" subtotal="count" baseField="0" baseItem="0"/></dataFields>' +
-      '<pivotTableStyleInfo name="PivotStyleLight16" showRowHeaders="1" showColHeaders="1" showRowStripes="0" showColStripes="0" showLastColumn="1"/></pivotTableDefinition>';
-    var cf = '<conditionalFormatting sqref="A2:C' + L + '">' + CORES_LOTE.map(function (_, c) {
-      return '<cfRule type="expression" dxfId="' + c + '" priority="' + (c + 1) + '"><formula>AND(LEFT($C2,5)="Lote ",MOD(VALUE(MID($C2,6,3))-1,' + CORES_LOTE.length + ')=' + c + ')</formula></cfRule>';
-    }).join('') + '</conditionalFormatting>';
-    var abaPivot = { nome: 'Tabela dinâmica', cab: ['Lote / rua', 'COUNTA of SKU', 'Lote'], linhas: linPiv, pivot: { definicao: definicao, registros: registros, tabela: tabela },
-      op: { semFiltro: true, cf: cf, estilo: function (k) { return tipoLinha[k] === 'total' ? 9 : tipoLinha[k] === 'lote' ? 8 : 0; } } };
+    var abaPivot = abaPivotLotes(procv, 'procv');
     var resumoLotes = { nome: 'Lotes', cab: ['Lote', 'Área', 'SKUs', 'Ruas', 'Dentro da faixa?'], linhas: lotes.map(function (l) {
       return [nomeLote(l.n), l.area, String(l.total), l.pedacos.map(function (p) { return p.rua + (p.parte ? ' (parte ' + p.parte + ')' : ''); }).join(', '), l.ok ? 'Sim' : (l.total < min ? 'Abaixo de ' + min : 'Acima de ' + max)];
     }), op: { semFiltro: true, estilo: function (k) { return 2 + k % CORES_LOTE.length; } } };
@@ -550,6 +613,8 @@
         '<div class="kpis"><div class="k"><b id="k1">—</b><span>planilhas juntadas</span></div><div class="k"><b id="k2">—</b><span>linhas lidas</span></div><div class="k"><b id="k3">—</b><span>linhas removidas</span></div><div class="k d"><b id="k4">—</b><span>linhas na planilha</span></div></div>' +
         '<div class="grid"><div class="card"><h3>🧹 Removidas por zona</h3><div class="zona-res" id="zres"></div></div>' +
           '<div class="card"><h3>📂 Já tem o arquivo baixado?</h3><div class="drop" id="drop">Arraste aqui o .zip / .csv / .xlsx do On-Hand<br><small>ou clique para escolher</small></div><input type="file" id="arq" multiple accept=".zip,.csv,.xlsx" hidden></div></div>' +
+        '<div class="card" style="margin-top:16px"><label class="ck" style="font-weight:600"><input type="checkbox" id="ohLotes"> Separar em lotes para Rack Transfer</label>' +
+          '<div style="font-size:13px;color:#6b7280;margin-top:6px">Tira SKU repetido (fica a posição com mais estoque), separa por zona e monta lotes de até <input id="ohMax" type="number" style="width:70px;border:1px solid #e5e7eb;border-radius:6px;padding:3px 6px"> SKUs, com a tabela dinâmica Lote &gt; rua.</div></div>' +
         '<div class="log" id="log"></div></section>' +
       '<section class="view" id="v-cub"><h1>Cubiscan — lotes por rua</h1><p class="sub">Puxa o backlog do Cubiscan, monta a tabela de ruas e junta as ruas vizinhas em lotes de <b id="cubFaixa"></b> SKUs. Tudo numa planilha só.</p>' +
         '<div class="hero"><div class="txt"><h2>📏 Montar lotes do Cubiscan</h2><p id="cubTxt"></p>' +
@@ -679,7 +744,7 @@
     $('k3').textContent = fmt(r.lidas - r.final); $('k4').textContent = fmt(r.final);
     $('zres').innerHTML = cfg.zonas.map(function (z) { z = z.trim().toUpperCase(); return '<div class="zr"><b>' + fmt(r.porZona[z] || 0) + '</b>' + escH(z) + '</div>'; }).join('');
     ultimo = r; $('ultimo').classList.add('on'); $('ultNome').textContent = r.nome;
-    log('✅ Planilha pronta: ' + r.nome + ' — ' + fmt(r.final) + ' linhas (filtro pela coluna "' + r.coluna + '")', 'ok');
+    log('✅ Planilha pronta: ' + r.nome + ' — ' + fmt(r.final) + ' linhas (filtro pela coluna "' + r.coluna + '")' + (r.lotes ? ' · ' + fmt(r.lotes) + ' lotes com ' + fmt(r.unicos) + ' SKUs únicos' : ''), 'ok');
   }
   async function rodar(obterArquivos) {
     var go = $('go'); go.disabled = true; go.textContent = '⏳ Trabalhando…';
@@ -687,7 +752,7 @@
       var brutos = await obterArquivos();
       var r = await processarOnHand(brutos, aviso);
       aviso('✅ Pronto! A planilha foi baixada.', 100);
-      baixarBlob(r.blob, r.nome); mostrarResultado(r);
+      baixarBlob(r.blob, r.nome); if (r.blobLotes) setTimeout(function () { baixarBlob(r.blobLotes, r.nomeLotes); }, 800); mostrarResultado(r);
     } catch (e) { aviso('❌ ' + e.message, null); log('❌ ' + e.message, 'er'); }
     go.disabled = false; go.textContent = '📥 Baixar On-Hand';
   }
@@ -695,7 +760,7 @@
     log('Iniciando o download do On-Hand…');
     rodar(async function () { var a = await exportarRC(ONHAND, 86, aviso); log('📥 Baixado: ' + a.nome + ' (' + fmt(Math.round(a.dados.length / 1024)) + ' KB)'); return [a]; });
   };
-  $('denovo').onclick = function () { if (ultimo) baixarBlob(ultimo.blob, ultimo.nome); };
+  $('denovo').onclick = function () { if (ultimo) { baixarBlob(ultimo.blob, ultimo.nome); if (ultimo.blobLotes) setTimeout(function () { baixarBlob(ultimo.blobLotes, ultimo.nomeLotes); }, 800); } };
 
   function usarArquivos(lista) {
     var fs = [].filter.call(lista, function (f) { return /\.(zip|csv|xlsx)$/i.test(f.name); });
@@ -1035,6 +1100,10 @@
   $('sPuxar').onclick = puxarBacklog;
   raiz.querySelector('.mi[data-v=start]').addEventListener('click', function () { $('sData').value = hojeTxt(); montarStart(); if (temApp && !startPuxado) puxarBacklog(); });
   montarStart();
+
+  $('ohLotes').checked = cfg.ohLotes !== false; $('ohMax').value = cfg.ohMax || 230;
+  $('ohLotes').onchange = function () { cfg.ohLotes = $('ohLotes').checked; salvarCfg(); };
+  $('ohMax').onchange = function () { cfg.ohMax = Math.max(10, +$('ohMax').value || 230); $('ohMax').value = cfg.ohMax; salvarCfg(); };
 
   function preencherCfg() { $('zonas').value = cfg.zonas.join('\n'); $('dup').checked = !!cfg.dup; $('zres').innerHTML = cfg.zonas.map(function (z) { return '<div class="zr"><b>—</b>' + escH(z) + '</div>'; }).join(''); }
   $('salvar').onclick = function () {
