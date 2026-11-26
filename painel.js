@@ -2,7 +2,7 @@
    Tudo roda no navegador de quem clicou, com o login dessa pessoa. Nenhum dado sai do PC. */
 (function () {
   'use strict';
-  var VERSAO = '1.10.0';
+  var VERSAO = '1.11.0';
   var ULTIMAS = { ext: '1.0.0', app: '1.4.0' };   // versões mais novas da extensão e do app (aviso de atualização)
   var ID = 'painel-qualidade-raiz';
   var ZONAS_PADRAO = ['AV', 'D', 'DEM', 'EXZO', 'MI', 'MO', 'OS', 'RO', 'TS', 'RTS'];
@@ -601,6 +601,7 @@
       '<button class="mi" data-v="cub">📏 Cubiscan</button>' +
       '<button class="mi" data-v="rt">🔁 Rack Transfer</button>' +
       '<button class="mi" data-v="start">🌅 Start do turno</button>' +
+      '<button class="mi" data-v="rel">📑 Puxar relatórios</button>' +
       '<button class="mi" disabled title="Em breve">🔜 Próxima automação</button>' +
       '<div class="sec">Sistema</div><button class="mi" data-v="config">🛠️ Configurações</button>' +
       '<div class="rod">v' + VERSAO + (temApp ? (String(window.__painelApp).indexOf('ext-') === 0 ? ' · extensão ✓' : ' · app ✓') : '') + ' · roda com o seu login<button class="voltar" id="fechar">— Minimizar</button></div>' +
@@ -648,6 +649,18 @@
           '<div class="card"><h3>💬 Mensagem pronta</h3><textarea id="sMsg" style="height:420px;font-family:Segoe UI,Arial,sans-serif;font-size:13.5px"></textarea>' +
             '<div style="display:flex;gap:8px;margin-top:10px"><button class="btn l" id="sCopiar" style="flex:1;padding:12px;font-size:15px">📋 Copiar mensagem</button></div><div id="sOk" class="ok" style="font-size:13px;margin-top:6px;color:#16a34a"></div></div>' +
         '</div>' +
+      '</section>' +
+      '<section class="view" id="v-rel"><h1>Puxar relatórios</h1><p class="sub">Escolha a data e os relatórios. O painel pede ao WMS, espera ficar pronto e baixa cada um já em planilha (.xlsx), com tudo junto numa aba.</p>' +
+        '<div class="grid" style="margin-top:0"><div class="card"><h3>📅 Data do relatório</h3>' +
+          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div><label>De</label><input type="date" id="relDe" style="width:100%;border:1px solid #e5e7eb;border-radius:8px;padding:8px"></div>' +
+          '<div><label>Até</label><input type="date" id="relAte" style="width:100%;border:1px solid #e5e7eb;border-radius:8px;padding:8px"></div></div>' +
+          '<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap"><button class="btn" data-rd="1">Ontem</button><button class="btn" data-rd="0">Hoje</button><button class="btn" data-rd="7">Últimos 7 dias</button></div>' +
+          '<div style="font-size:12px;color:#6b7280;margin-top:8px">Pega o dia inteiro (00:00 até 23:59). Para um dia só, deixe De e Até iguais.</div></div>' +
+          '<div class="card"><h3>📋 Quais relatórios</h3><div id="relLista"></div></div></div>' +
+        '<div class="hero" style="margin-top:16px"><div class="txt"><h2>📥 Puxar do WMS</h2><p>Um relatório por vez. Pode continuar usando o PC enquanto o WMS gera.</p>' +
+          '<div class="prog" id="rProg"><div class="barra"><i id="rBarra"></i></div><div class="st" id="rSt"></div></div></div>' +
+          '<button class="go" id="relGo">📥 Puxar relatórios</button></div>' +
+        '<div class="card" style="margin-top:16px"><h3>⬇️ Baixados nesta sessão</h3><div id="relFeitos" style="font-size:13px;color:#6b7280">Nenhum ainda.</div></div>' +
       '</section>' +
       '<section class="view" id="v-config"><h1>Configurações</h1><p class="sub">Ficam salvas neste navegador.</p><div class="card" style="max-width:560px">' +
         '<h3>On-Hand</h3><label>Zonas para remover (uma por linha)</label><textarea id="zonas"></textarea>' +
@@ -761,6 +774,80 @@
     rodar(async function () { var a = await exportarRC(ONHAND, 86, aviso); log('📥 Baixado: ' + a.nome + ' (' + fmt(Math.round(a.dados.length / 1024)) + ' KB)'); return [a]; });
   };
   $('denovo').onclick = function () { if (ultimo) { baixarBlob(ultimo.blob, ultimo.nome); if (ultimo.blobLotes) setTimeout(function () { baixarBlob(ultimo.blobLotes, ultimo.nomeLotes); }, 800); } };
+
+  /* ===================== PUXAR RELATÓRIOS (Consumíveis, Picking, Checking) ===================== */
+  var RELATORIOS = [
+    { id: 'cons', nome: 'Consumíveis (Outbound Consumable List)', arq: 'Consumiveis', tipo: 715,
+      extra: function (de, ate) { return { taskType: 715, module: 2, timeRange: 0, time_from: de, time_to: ate, date_reference: 2, status_list: [8] }; } },
+    { id: 'pick', nome: 'Picking Task (Sub-Picking)', arq: 'Picking Task', tipo: 1050,
+      extra: function (de, ate) { return { timeRange: 0, module: 2, taskType: 1050, status_list: [-1], picking_type: [-1], time_from: de, time_to: ate }; } },
+    { id: 'chk', nome: 'Checking Task', arq: 'Checking Task', tipo: 704,
+      extra: function (de, ate) { return { timeRange: 0, module: 2, taskType: 704, status_list: [-1], time_from: de, time_to: ate }; } }
+  ];
+  function isoDia(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+  function diaLocal(iso, fim) { var p = iso.split('-').map(Number); return new Date(p[0], p[1] - 1, p[2], fim ? 23 : 0, fim ? 59 : 0, fim ? 59 : 0); }
+  function ddmm(iso) { var p = iso.split('-'); return p[2] + '-' + p[1]; }
+  function relAviso(t, pct) { $('rProg').classList.add('on'); $('rSt').textContent = t; if (pct != null) $('rBarra').style.width = Math.min(100, pct) + '%'; $('pilSt').textContent = '· ' + t; }
+  function relAtalho(dias) {
+    var hoje = new Date(), de = new Date(), ate = new Date();
+    if (dias === 0) { de = hoje; ate = hoje; }
+    else if (dias === 1) { de.setDate(hoje.getDate() - 1); ate.setDate(hoje.getDate() - 1); }
+    else { de.setDate(hoje.getDate() - dias); ate.setDate(hoje.getDate() - 1); }
+    $('relDe').value = isoDia(de); $('relAte').value = isoDia(ate);
+  }
+  $('relLista').innerHTML = RELATORIOS.map(function (r) {
+    return '<label class="ck" style="display:block;margin:8px 0"><input type="checkbox" data-rel="' + r.id + '"' + (cfg['rel_' + r.id] === false ? '' : ' checked') + '> ' + escH(r.nome) + '</label>';
+  }).join('');
+  [].forEach.call(raiz.querySelectorAll('[data-rel]'), function (c) { c.onchange = function () { cfg['rel_' + c.dataset.rel] = c.checked; salvarCfg(); }; });
+  [].forEach.call(raiz.querySelectorAll('[data-rd]'), function (b) { b.onclick = function () { relAtalho(+b.dataset.rd); }; });
+  relAtalho(1);
+  var relFeitos = [];
+  function relMostrarFeitos() {
+    var box = $('relFeitos'); box.innerHTML = '';
+    if (!relFeitos.length) { box.textContent = 'Nenhum ainda.'; return; }
+    relFeitos.forEach(function (f) {
+      var b = document.createElement('button'); b.className = 'btn l'; b.style.margin = '4px 6px 4px 0';
+      b.textContent = '⬇️ ' + f.nome + (f.linhas != null ? ' (' + fmt(f.linhas) + ' linhas)' : ''); b.onclick = function () { baixarBlob(f.blob, f.nome); };
+      box.appendChild(b);
+    });
+  }
+  $('relGo').onclick = async function () {
+    var de = $('relDe').value, ate = $('relAte').value || de;
+    if (!de) return relAviso('❌ Escolha a data.', null);
+    if (ate < de) return relAviso('❌ A data "Até" está antes da "De".', null);
+    var escolhidos = RELATORIOS.filter(function (r) { var c = raiz.querySelector('[data-rel=' + r.id + ']'); return c && c.checked; });
+    if (!escolhidos.length) return relAviso('❌ Marque pelo menos um relatório.', null);
+    var tFrom = Math.floor(diaLocal(de).getTime() / 1000), tTo = Math.floor(diaLocal(ate, true).getTime() / 1000);
+    var periodo = de === ate ? ddmm(de) : ddmm(de) + ' a ' + ddmm(ate);
+    var b = $('relGo'); b.disabled = true; b.textContent = '⏳ Trabalhando…';
+    var ok = 0, erros = [];
+    for (var i = 0; i < escolhidos.length; i++) {
+      var r = escolhidos[i], pre = '(' + (i + 1) + '/' + escolhidos.length + ') ' + r.arq + ': ';
+      try {
+        log('Puxando ' + r.nome + ' de ' + periodo + '…');
+        var corpo = { export_module: 2, task_type: r.tipo, extra_data: JSON.stringify(r.extra(tFrom, tTo)) };
+        var a = await exportarRC(corpo, r.tipo, function (t, pct) { relAviso(pre + t, pct); });
+        relAviso(pre + 'Montando a planilha…', 70);
+        var nome = r.arq + ' PE ' + periodo + '.xlsx', blob, linhas = null;
+        try {
+          var arqs = await lerArquivo(a.nome, a.dados);
+          if (!arqs.length) throw new Error('vazio');
+          var u = unificar(arqs, false); linhas = u.linhas.length;
+          blob = await gerarXLSX([{ nome: r.arq, cab: u.cab, linhas: u.linhas }]);
+        } catch (e2) {   // não conseguiu abrir: entrega o arquivo original do WMS
+          nome = r.arq + ' PE ' + periodo + (a.nome.match(/\.[a-z]+$/i) || ['.zip'])[0];
+          blob = new Blob([a.dados]);
+          log('⚠️ ' + r.arq + ': não consegui converter, baixando o arquivo original do WMS.', 'er');
+        }
+        baixarBlob(blob, nome);
+        relFeitos.unshift({ nome: nome, blob: blob, linhas: linhas }); relMostrarFeitos();
+        log('✅ ' + nome + (linhas != null ? ' — ' + fmt(linhas) + ' linhas' : ''), 'ok');
+        ok++;
+      } catch (e) { erros.push(r.arq + ': ' + e.message); log('❌ ' + r.arq + ': ' + e.message, 'er'); }
+    }
+    relAviso(erros.length ? '⚠️ ' + ok + ' baixado(s). Erro em: ' + erros.join(' | ') : '✅ Pronto! ' + ok + ' relatório(s) baixado(s).', erros.length ? null : 100);
+    b.disabled = false; b.textContent = '📥 Puxar relatórios';
+  };
 
   function usarArquivos(lista) {
     var fs = [].filter.call(lista, function (f) { return /\.(zip|csv|xlsx)$/i.test(f.name); });
